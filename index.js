@@ -1,17 +1,20 @@
 const {
   Client,
   GatewayIntentBits,
-  PermissionsBitField,
-  SlashCommandBuilder,
   REST,
   Routes,
-  EmbedBuilder,
-  PermissionFlagsBits
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  EmbedBuilder
 } = require("discord.js");
 
 const fs = require("fs");
+const path = require("path");
 
-// ================= CONFIG =================
+// ===============================
+// ELYX TRADING BOT
+// PART 1 - BASIC SETUP
+// ===============================
 
 const client = new Client({
   intents: [
@@ -22,250 +25,567 @@ const client = new Client({
   ]
 });
 
-const DATA_FILE = "./data.json";
+// DATA STORAGE
+const DATA_FILE = path.join(__dirname, "data.json");
 
 let data = {
-  values: {},
-  invites: {},
+  aiEnabled: true,
   warnings: {},
   welcomeChannel: {},
-  aiEnabled: true
+  welcomeEnabled: {},
+  prefix: "!",
+  autoReplies: {
+    hi: "WSP BRO 😎🔥",
+    hello: "Hello bro 👋",
+    hey: "Hey bro 😎",
+    wassup: "All good bro 🔥",
+    "good morning": "Good morning bro ☀️",
+    "good night": "Good night bro 🌙",
+    gn: "GN BRO 🌙",
+    gm: "GM BRO ☀️",
+    bye: "Bye bro 👋",
+    "who are you": "I'm Elyx Bot 🤖🔥",
+    "how are you": "I'm good bro 😎"
+  }
 };
 
-if (fs.existsSync(DATA_FILE)) {
+// LOAD SAVED DATA
+function loadData() {
   try {
-    data = {
-      ...data,
-      ...JSON.parse(fs.readFileSync(DATA_FILE, "utf8"))
-    };
+    if (fs.existsSync(DATA_FILE)) {
+      const saved = JSON.parse(
+        fs.readFileSync(DATA_FILE, "utf8")
+      );
+
+      data = {
+        ...data,
+        ...saved,
+        autoReplies: {
+          ...data.autoReplies,
+          ...(saved.autoReplies || {})
+        }
+      };
+    }
   } catch (error) {
-    console.error("Could not read data.json:", error.message);
+    console.error("Data loading error:", error);
   }
 }
 
+// SAVE DATA
 function saveData() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  try {
+    fs.writeFileSync(
+      DATA_FILE,
+      JSON.stringify(data, null, 2)
+    );
+  } catch (error) {
+    console.error("Data saving error:", error);
+  }
 }
 
-const cooldowns = new Map();
-const histories = new Map();
-const inviteCache = new Map();
+loadData();
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-
-// ================= SLASH COMMANDS =================
-
+// COMMAND LIST
 const commands = [
-
   new SlashCommandBuilder()
     .setName("help")
-    .setDescription("Show all Elyx Trading commands"),
+    .setDescription("Show all Elyx Bot commands"),
 
   new SlashCommandBuilder()
     .setName("ping")
     .setDescription("Check bot response speed"),
 
   new SlashCommandBuilder()
-    .setName("ask")
-    .setDescription("Ask AI anything")
-    .addStringOption(o =>
-      o.setName("question")
-        .setDescription("Your question")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("value")
-    .setDescription("Check an item value")
-    .addStringOption(o =>
-      o.setName("item")
-        .setDescription("Item name")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("valueadd")
-    .setDescription("Add or update an item value")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addStringOption(o =>
-      o.setName("item")
-        .setDescription("Item name")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("price")
-        .setDescription("Item value")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("valuelist")
-    .setDescription("Show saved item values"),
-
-  new SlashCommandBuilder()
-    .setName("invites")
-    .setDescription("Check your tracked invites")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member to check")
-    ),
-
-  new SlashCommandBuilder()
-    .setName("inviteboard")
-    .setDescription("Show invite leaderboard"),
-
-  new SlashCommandBuilder()
-    .setName("userinfo")
-    .setDescription("Show member information")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member to check")
-    ),
-
-  new SlashCommandBuilder()
     .setName("serverinfo")
     .setDescription("Show server information"),
 
   new SlashCommandBuilder()
+    .setName("userinfo")
+    .setDescription("Show user information")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Choose a user")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
     .setName("avatar")
-    .setDescription("Show a member's avatar")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
+    .setDescription("Show a user's avatar")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Choose a user")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("botinfo")
+    .setDescription("Show Elyx Bot information"),
+
+  new SlashCommandBuilder()
+    .setName("ai")
+    .setDescription("Enable or disable automatic chat replies")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.Administrator
+    )
+    .addBooleanOption(option =>
+      option
+        .setName("enabled")
+        .setDescription("Enable automatic replies?")
+        .setRequired(true)
+    )
+];
+
+console.log("Elyx Bot: Part 1 loaded.");// ===============================
+// PART 2 - MORE SLASH COMMANDS
+// ===============================
+
+// MODERATION COMMANDS
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("kick")
+    .setDescription("Kick a member from the server")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.KickMembers
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Member to kick")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("reason")
+        .setDescription("Reason for kick")
+        .setRequired(false)
     ),
 
   new SlashCommandBuilder()
     .setName("ban")
-    .setDescription("Ban a member")
-    .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers)
-    .addUserOption(o =>
-      o.setName("user")
+    .setDescription("Ban a member from the server")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.BanMembers
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
         .setDescription("Member to ban")
         .setRequired(true)
     )
-    .addStringOption(o =>
-      o.setName("reason")
-        .setDescription("Reason for the ban")
-    ),
-
-  new SlashCommandBuilder()
-    .setName("kick")
-    .setDescription("Kick a member")
-    .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers)
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member to kick")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("reason")
-        .setDescription("Reason")
+    .addStringOption(option =>
+      option
+        .setName("reason")
+        .setDescription("Reason for ban")
+        .setRequired(false)
     ),
 
   new SlashCommandBuilder()
     .setName("timeout")
     .setDescription("Timeout a member")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ModerateMembers
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Member to timeout")
         .setRequired(true)
     )
-    .addIntegerOption(o =>
-      o.setName("minutes")
+    .addIntegerOption(option =>
+      option
+        .setName("minutes")
         .setDescription("Timeout duration in minutes")
-        .setRequired(true)
         .setMinValue(1)
-        .setMaxValue(40320)
+        .setMaxValue(10080)
+        .setRequired(true)
     )
-    .addStringOption(o =>
-      o.setName("reason")
-        .setDescription("Reason")
+    .addStringOption(option =>
+      option
+        .setName("reason")
+        .setDescription("Reason for timeout")
+        .setRequired(false)
     ),
 
   new SlashCommandBuilder()
-    .setName("warn")
-    .setDescription("Warn a member")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
+    .setName("clear")
+    .setDescription("Delete recent messages")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageMessages
+    )
+    .addIntegerOption(option =>
+      option
+        .setName("amount")
+        .setDescription("Number of messages (1-100)")
+        .setMinValue(1)
+        .setMaxValue(100)
         .setRequired(true)
     )
-    .addStringOption(o =>
-      o.setName("reason")
+);
+
+// WARN COMMANDS
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("warn")
+    .setDescription("Warn a member")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ModerateMembers
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Member to warn")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("reason")
         .setDescription("Warning reason")
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName("warnings")
-    .setDescription("View a member's warnings")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Member")
+    .setDescription("Check a member's warnings")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Member to check")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("clearwarnings")
+    .setDescription("Clear a member's warnings")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ModerateMembers
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Member to clear")
+        .setRequired(true)
+    )
+);
+
+console.log("Elyx Bot: Part 2 loaded.");// ===============================
+// PART 3 - FUN & UTILITY COMMANDS
+// ===============================
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("8ball")
+    .setDescription("Ask the magic 8-ball a question")
+    .addStringOption(option =>
+      option
+        .setName("question")
+        .setDescription("Your question")
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
-    .setName("purge")
-    .setDescription("Delete recent messages")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
-    .addIntegerOption(o =>
-      o.setName("amount")
-        .setDescription("Number of messages to delete")
-        .setRequired(true)
-        .setMinValue(1)
+    .setName("coinflip")
+    .setDescription("Flip a coin"),
+
+  new SlashCommandBuilder()
+    .setName("roll")
+    .setDescription("Roll a dice")
+    .addIntegerOption(option =>
+      option
+        .setName("sides")
+        .setDescription("Number of dice sides")
+        .setMinValue(2)
         .setMaxValue(100)
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("choose")
+    .setDescription("Choose between options")
+    .addStringOption(option =>
+      option
+        .setName("options")
+        .setDescription("Separate choices with commas")
+        .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName("poll")
-    .setDescription("Create a poll")
-    .addStringOption(o =>
-      o.setName("question")
-        .setDescription("Poll question")
+    .setDescription("Create a simple poll")
+    .addStringOption(option =>
+      option
+        .setName("question")
+        .setDescription("What are you asking?")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("say")
+    .setDescription("Make the bot send a message")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageMessages
+    )
+    .addStringOption(option =>
+      option
+        .setName("message")
+        .setDescription("Message to send")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("userinfo")
+    .setDescription("Show information about a user")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Select a user")
+        .setRequired(false)
+    )
+);
+
+// AUTO-REPLY MANAGEMENT COMMANDS
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("addreply")
+    .setDescription("Add an automatic chat reply")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    )
+    .addStringOption(option =>
+      option
+        .setName("trigger")
+        .setDescription("Word or phrase that triggers the reply")
         .setRequired(true)
     )
-    .addStringOption(o =>
-      o.setName("option1")
-        .setDescription("First option")
+    .addStringOption(option =>
+      option
+        .setName("response")
+        .setDescription("Bot's reply")
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("removereply")
+    .setDescription("Remove an automatic chat reply")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
     )
-    .addStringOption(o =>
-      o.setName("option2")
-        .setDescription("Second option")
+    .addStringOption(option =>
+      option
+        .setName("trigger")
+        .setDescription("Trigger to remove")
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("listreplies")
+    .setDescription("Show automatic chat replies")
+);
+
+console.log("Elyx Bot: Part 3 loaded.");// ===============================
+// PART 4 - WELCOME & SERVER TOOLS
+// ===============================
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("setwelcome")
+    .setDescription("Set the welcome channel")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
     )
-    .addStringOption(o =>
-      o.setName("option3")
-        .setDescription("Optional third option")
+    .addChannelOption(option =>
+      option
+        .setName("channel")
+        .setDescription("Choose the welcome channel")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("welcome-toggle")
+    .setDescription("Enable or disable welcome messages")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
     )
-    .addStringOption(o =>
-      o.setName("option4")
-        .setDescription("Optional fourth option")
+    .addBooleanOption(option =>
+      option
+        .setName("enabled")
+        .setDescription("Enable welcome messages?")
+        .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName("announce")
-    .setDescription("Post an announcement")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addStringOption(o =>
-      o.setName("message")
-        .setDescription("Announcement text")
+    .setDescription("Send a server announcement")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    )
+    .addStringOption(option =>
+      option
+        .setName("message")
+        .setDescription("Announcement message")
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
-    .setName("welcome")
-    .setDescription("Set the welcome channel")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addChannelOption(o =>
-      o.setName("channel")
-        .setDescription("Channel for welcome messages")
+    .setName("membercount")
+    .setDescription("Show the server member count"),
+
+  new SlashCommandBuilder()
+    .setName("roleinfo")
+    .setDescription("Show information about a role")
+    .addRoleOption(option =>
+      option
+        .setName("role")
+        .setDescription("Select a role")
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("poll-end")
+    .setDescription("End a poll by closing voting")
+);
+// ===============================
+// PART 5 - ADVANCED SERVER COMMANDS
+// ===============================
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("lock")
+    .setDescription("Lock the current channel")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageChannels
+    ),
+
+  new SlashCommandBuilder()
+    .setName("unlock")
+    .setDescription("Unlock the current channel")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageChannels
+    ),
+
+  new SlashCommandBuilder()
+    .setName("slowmode")
+    .setDescription("Set channel slowmode")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageChannels
+    )
+    .addIntegerOption(option =>
+      option
+        .setName("seconds")
+        .setDescription("Delay between messages (0-21600)")
+        .setMinValue(0)
+        .setMaxValue(21600)
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("nickname")
+    .setDescription("Change a member's nickname")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageNicknames
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Member to rename")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("name")
+        .setDescription("New nickname")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("role-add")
+    .setDescription("Give a role to a member")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageRoles
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Member receiving the role")
+        .setRequired(true)
+    )
+    .addRoleOption(option =>
+      option
+        .setName("role")
+        .setDescription("Role to give")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("role-remove")
+    .setDescription("Remove a role from a member")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageRoles
+    )
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("Member losing the role")
+        .setRequired(true)
+    )
+    .addRoleOption(option =>
+      option
+        .setName("role")
+        .setDescription("Role to remove")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("giveaway")
+    .setDescription("Create a simple giveaway announcement")
+    .setDefaultMemberPermissions(
+      PermissionFlagsBits.ManageGuild
+    )
+    .addStringOption(option =>
+      option
+        .setName("prize")
+        .setDescription("Giveaway prize")
+        .setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option
+        .setName("minutes")
+        .setDescription("Giveaway duration in minutes")
+        .setMinValue(1)
+        .setMaxValue(10080)
+        .setRequired(true)
+    )
+);
+
+console.log("Elyx Bot: Part 5 loaded.");
+console.log("Elyx Bot: Part 4 loaded.");// ===============================
+// PART 6 - EXTRA COMMANDS
+// ===============================
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("hug")
+    .setDescription("Send a virtual hug")
+    .addUserOption(o =>
+      o.setName("user").setDescription("Choose user").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("slap")
+    .setDescription("Funny virtual slap")
+    .addUserOption(o =>
+      o.setName("user").setDescription("Choose user").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("ship")
+    .setDescription("Check friendship compatibility")
+    .addUserOption(o =>
+      o.setName("user").setDescription("Choose user").setRequired(true)
     ),
 
   new SlashCommandBuilder()
@@ -273,738 +593,583 @@ const commands = [
     .setDescription("Get a random joke"),
 
   new SlashCommandBuilder()
-    .setName("coinflip")
-    .setDescription("Flip a coin"),
+    .setName("fact")
+    .setDescription("Get a random fact"),
 
   new SlashCommandBuilder()
-    .setName("eightball")
-    .setDescription("Ask the magic 8-ball a question")
+    .setName("meme")
+    .setDescription("Get a random meme"),
+
+  new SlashCommandBuilder()
+    .setName("rate")
+    .setDescription("Rate something out of 100")
     .addStringOption(o =>
-      o.setName("question")
-        .setDescription("Your question")
-        .setRequired(true)
+      o.setName("thing").setDescription("What to rate").setRequired(true)
     ),
 
   new SlashCommandBuilder()
-    .setName("ai")
-    .setDescription("Enable or disable automatic AI chat")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addBooleanOption(o =>
-      o.setName("enabled")
-        .setDescription("Enable automatic AI replies")
-        .setRequired(true)
+    .setName("reverse")
+    .setDescription("Reverse some text")
+    .addStringOption(o =>
+      o.setName("text").setDescription("Text to reverse").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("clap")
+    .setDescription("Put 👏 between every word")
+    .addStringOption(o =>
+      o.setName("text").setDescription("Your text").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("emojify")
+    .setDescription("Turn text into emoji letters")
+    .addStringOption(o =>
+      o.setName("text").setDescription("Your text").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("randomnumber")
+    .setDescription("Generate a random number")
+    .addIntegerOption(o =>
+      o.setName("min").setDescription("Minimum").setRequired(true)
     )
+    .addIntegerOption(o =>
+      o.setName("max").setDescription("Maximum").setRequired(true)
+    ),
 
-].map(command => command.toJSON());
+  new SlashCommandBuilder()
+    .setName("remind")
+    .setDescription("Set a reminder message")
+    .addIntegerOption(o =>
+      o.setName("minutes").setDescription("Minutes").setMinValue(1).setMaxValue(10080).setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("message").setDescription("Reminder text").setRequired(true)
+    ),
 
-// ================= GROQ AI =================
+  new SlashCommandBuilder()
+    .setName("suggest")
+    .setDescription("Submit a server suggestion")
+    .addStringOption(o =>
+      o.setName("idea").setDescription("Your suggestion").setRequired(true)
+    ),
 
-async function askGroq(question, userId, username) {
-  if (!GROQ_API_KEY) {
-    throw new Error("GROQ_API_KEY is missing");
-  }
+  new SlashCommandBuilder()
+    .setName("feedback")
+    .setDescription("Send feedback about the bot")
+    .addStringOption(o =>
+      o.setName("message").setDescription("Your feedback").setRequired(true)
+    ),
 
-  const history = histories.get(userId) || [];
+  new SlashCommandBuilder()
+    .setName("support")
+    .setDescription("Show server support information"),
 
-  const response = await fetch(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${GROQ_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are Elyx, a friendly Discord server assistant. " +
-              "Chat naturally like a helpful friend. Answer questions " +
-              "accurately, explain things simply, and use the language " +
-              "the user uses, including Hindi, Gujarati or English. " +
-              "Do not claim you know something if you do not. " +
-              "Keep ordinary Discord replies concise. " +
-              "Do not claim to have performed actions you did not perform. " +
-              "The current user's Discord username is " + username + "."
-          },
-          ...history,
-          {
-            role: "user",
-            content: question
-          }
-        ],
-        temperature: 0.8,
-        max_tokens: 700
-      })
-    }
-  );
+  new SlashCommandBuilder()
+    .setName("invite")
+    .setDescription("Create a server invite"),
 
-  if (!response.ok) {
-    const details = await response.text();
-    console.error("Groq API error:", response.status, details);
-    throw new Error("Groq API request failed");
-  }
+  new SlashCommandBuilder()
+    .setName("poll-create")
+    .setDescription("Create a voting poll")
+    .addStringOption(o =>
+      o.setName("question").setDescription("Poll question").setRequired(true)
+    )
+);
 
-  const result = await response.json();
-  const answer = result.choices?.[0]?.message?.content?.trim();
+console.log("Elyx Bot: Part 6 loaded.");// =====================================
+// PART 7 - EVENTS, HANDLERS & REGISTRATION
+// =====================================
 
-  if (!answer) {
-    throw new Error("AI returned an empty answer");
-  }
+const { Events, ChannelType } = require("discord.js");
 
-  const updatedHistory = [
-    ...history,
-    { role: "user", content: question },
-    { role: "assistant", content: answer }
-  ].slice(-12);
+// HELPERS
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 
-  histories.set(userId, updatedHistory);
-
-  return answer;
+function getWarnings(guildId, userId) {
+  return data.warnings[`${guildId}_${userId}`] || [];
 }
 
-// ================= READY =================
-
-client.once("ready", async () => {
-  console.log(`Elyx Trading online as ${client.user.tag}`);
+// BOT READY
+client.once(Events.ClientReady, async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
   try {
-    const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+    const uniqueCommands = [
+      ...new Map(
+        commands.map(command => [command.name, command])
+      ).values()
+    ];
+
+    const rest = new REST({ version: "10" }).setToken(
+      process.env.DISCORD_TOKEN
+    );
 
     await rest.put(
       Routes.applicationCommands(client.user.id),
-      { body: commands }
+      { body: uniqueCommands.map(command => command.toJSON()) }
     );
 
-    console.log("Slash commands registered successfully.");
+    console.log(`✅ Registered ${uniqueCommands.length} slash commands.`);
   } catch (error) {
-    console.error("Slash command registration failed:", error);
+    console.error("Command registration error:", error);
   }
 
-  // Cache current invite counts for tracking future joins.
-  for (const guild of client.guilds.cache.values()) {
-    try {
-      const invites = await guild.invites.fetch();
-      inviteCache.set(
-        guild.id,
-        new Map(invites.map(invite => [invite.code, invite.uses || 0]))
-      );
-    } catch {
-      console.log(`Invite tracking unavailable in ${guild.name}`);
-    }
-  }
+  client.user.setActivity("Elyx Trading", {
+    type: 3
+  });
 });
 
-// ================= SLASH COMMAND HANDLER =================
-
-client.on("interactionCreate", async interaction => {
+// SLASH COMMAND HANDLER
+client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  const { commandName, options, guild, member } = interaction;
+  const { commandName, guild, member } = interaction;
+
+  const reply = async content => {
+    if (interaction.replied || interaction.deferred) {
+      return interaction.followUp({
+        content,
+        ephemeral: true
+      });
+    }
+
+    return interaction.reply({
+      content,
+      ephemeral: true
+    });
+  };
 
   try {
-
     // HELP
     if (commandName === "help") {
       const embed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setTitle("⚡ Elyx Trading — Commands")
+        .setTitle("🔥 Elyx Trading — Commands")
         .setDescription(
-          "**🤖 AI**\n" +
-          "`/ask` `/ai`\n\n" +
-          "**💰 Trading**\n" +
-          "`/value` `/valueadd` `/valuelist`\n\n" +
-          "**🎟️ Invites**\n" +
-          "`/invites` `/inviteboard`\n\n" +
-          "**🛡️ Moderation**\n" +
-          "`/ban` `/kick` `/timeout` `/warn` `/warnings` `/purge`\n\n" +
-          "**👤 Information**\n" +
-          "`/userinfo` `/serverinfo` `/avatar`\n\n" +
-          "**🎉 Fun**\n" +
-          "`/joke` `/coinflip` `/eightball`\n\n" +
-          "**⚙️ Utility**\n" +
-          "`/poll` `/announce` `/welcome` `/ping`"
+          "**General:** `/ping` `/help` `/botinfo` `/serverinfo` `/userinfo` `/avatar` `/membercount`\n\n" +
+          "**Moderation:** `/kick` `/ban` `/timeout` `/clear` `/warn` `/warnings` `/clearwarnings`\n\n" +
+          "**Channels & Roles:** `/lock` `/unlock` `/slowmode` `/nickname` `/role-add` `/role-remove` `/roleinfo`\n\n" +
+          "**Fun:** `/8ball` `/coinflip` `/roll` `/choose` `/joke` `/fact` `/meme` `/hug` `/slap` `/ship` `/rate`\n\n" +
+          "**Tools:** `/reverse` `/clap` `/randomnumber` `/remind` `/poll` `/poll-create` `/suggest` `/feedback` `/invite`\n\n" +
+          "**Server setup:** `/setwelcome` `/welcome-toggle` `/announce` `/giveaway`\n\n" +
+          "**Auto replies:** `/ai` `/addreply` `/removereply` `/listreplies`"
         )
-        .setFooter({ text: "Elyx Trading • All-in-One Bot" });
+        .setFooter({ text: "Elyx Trading • Bot Help" });
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    // PING
+    // BASIC INFO
     if (commandName === "ping") {
-      return interaction.reply(
-        `🏓 Pong! WebSocket: ${client.ws.ping}ms`
+      return reply(`🏓 Pong! ${client.ws.ping}ms`);
+    }
+
+    if (commandName === "botinfo") {
+      return reply(
+        `🤖 **${client.user.tag}**\nServers: ${client.guilds.cache.size}\nUsers: ${client.guilds.cache.reduce((n, g) => n + g.memberCount, 0)}`
       );
     }
 
-    // ASK AI
-    if (commandName === "ask") {
-      await interaction.deferReply();
-
-      try {
-        const question = options.getString("question");
-        const answer = await askGroq(
-          question,
-          interaction.user.id,
-          interaction.user.username
-        );
-
-        return interaction.editReply(answer.slice(0, 2000));
-      } catch {
-        return interaction.editReply(
-          "AI reply failed. Check the Groq API key, usage limits and console."
-        );
-      }
-    }
-
-    // ENABLE / DISABLE AUTO AI
-    if (commandName === "ai") {
-      data.aiEnabled = options.getBoolean("enabled");
-      saveData();
-
-      return interaction.reply(
-        `🤖 Automatic AI chat is now **${data.aiEnabled ? "enabled" : "disabled"}**.`
-      );
-    }
-
-    // VALUE ADD
-    if (commandName === "valueadd") {
-      const item = options.getString("item").trim().toLowerCase();
-      const price = options.getString("price").trim();
-
-      data.values[item] = price;
-      saveData();
-
-      return interaction.reply(`✅ **${item}** value saved: **${price}**`);
-    }
-
-    // VALUE
-    if (commandName === "value") {
-      const item = options.getString("item").trim().toLowerCase();
-      const price = data.values[item];
-
-      return interaction.reply(
-        price
-          ? `💰 **${item}** value: **${price}**`
-          : `I don't have a saved value for **${item}** yet.`
-      );
-    }
-
-    // VALUE LIST
-    if (commandName === "valuelist") {
-      const entries = Object.entries(data.values);
-
-      if (!entries.length) {
-        return interaction.reply("No item values saved yet.");
-      }
-
-      const description = entries
-        .slice(0, 40)
-        .map(([item, price]) => `🔹 **${item}** — ${price}`)
-        .join("\n");
-
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0x2ECC71)
-            .setTitle("💰 Trading Values")
-            .setDescription(description)
-        ]
-      });
-    }
-
-    // INVITES
-    if (commandName === "invites") {
-      const user = options.getUser("user") || interaction.user;
-      const count = data.invites[user.id] || 0;
-
-      return interaction.reply(
-        `🎟️ ${user.username} has **${count}** tracked invites.`
-      );
-    }
-
-    // INVITE LEADERBOARD
-    if (commandName === "inviteboard") {
-      const entries = Object.entries(data.invites)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10);
-
-      if (!entries.length) {
-        return interaction.reply("No invite data available yet.");
-      }
-
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xF1C40F)
-            .setTitle("🏆 Invite Leaderboard")
-            .setDescription(
-              entries.map(([id, count], i) =>
-                `**${i + 1}.** <@${id}> — ${count} invites`
-              ).join("\n")
-            )
-        ]
-      });
-    }
-
-    // USER INFO
-    if (commandName === "userinfo") {
-      const user = options.getUser("user") || interaction.user;
-      const targetMember = await guild.members.fetch(user.id).catch(() => null);
-
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle(`👤 ${user.username}`)
-        .setThumbnail(user.displayAvatarURL({ size: 256 }))
-        .addFields(
-          { name: "User ID", value: user.id },
-          { name: "Account Created", value: `<t:${Math.floor(user.createdTimestamp / 1000)}:D>` },
-          {
-            name: "Joined Server",
-            value: targetMember
-              ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:D>`
-              : "Unknown"
-          }
-        );
-
-      return interaction.reply({ embeds: [embed] });
-    }
-
-    // SERVER INFO
     if (commandName === "serverinfo") {
-      const owner = await guild.fetchOwner();
+      if (!guild) return reply("Use this command in a server.");
 
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle(`🏠 ${guild.name}`)
-        .setThumbnail(guild.iconURL({ size: 256 }))
-        .addFields(
-          { name: "Owner", value: owner.user.username, inline: true },
-          { name: "Members", value: String(guild.memberCount), inline: true },
-          { name: "Channels", value: String(guild.channels.cache.size), inline: true },
-          { name: "Created", value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>` }
-        );
-
-      return interaction.reply({ embeds: [embed] });
+      return reply(
+        `🏠 **${guild.name}**\nMembers: ${guild.memberCount}\nCreated: <t:${Math.floor(guild.createdTimestamp / 1000)}:D>`
+      );
     }
 
-    // AVATAR
+    if (commandName === "membercount") {
+      return reply(`👥 Members: **${guild.memberCount}**`);
+    }
+
+    if (commandName === "userinfo") {
+      const user = interaction.options.getUser("user") || interaction.user;
+      return reply(`👤 **${user.tag}**\nID: \`${user.id}\`\nCreated: <t:${Math.floor(user.createdTimestamp / 1000)}:D>`);
+    }
+
     if (commandName === "avatar") {
-      const user = options.getUser("user") || interaction.user;
-
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle(`${user.username}'s Avatar`)
-        .setImage(user.displayAvatarURL({ size: 1024 }));
-
-      return interaction.reply({ embeds: [embed] });
+      const user = interaction.options.getUser("user") || interaction.user;
+      return interaction.reply(user.displayAvatarURL({ size: 1024 }));
     }
 
-    // BAN / KICK
-    if (commandName === "ban" || commandName === "kick") {
-      const user = options.getUser("user");
-      const reason = options.getString("reason") || "No reason provided";
-      const target = await guild.members.fetch(user.id).catch(() => null);
-
-      if (!target) {
-        return interaction.reply({
-          content: "That member isn't in this server.",
-          ephemeral: true
-        });
-      }
-
-      if (user.id === interaction.user.id) {
-        return interaction.reply({
-          content: "You can't use this command on yourself.",
-          ephemeral: true
-        });
-      }
-
-      if (user.id === client.user.id) {
-        return interaction.reply({
-          content: "I can't moderate myself.",
-          ephemeral: true
-        });
-      }
-
-      if (target.roles.highest.position >= member.roles.highest.position &&
-          guild.ownerId !== interaction.user.id) {
-        return interaction.reply({
-          content: "You can't moderate someone with an equal or higher role.",
-          ephemeral: true
-        });
-      }
-
-      try {
-        if (commandName === "ban") {
-          if (!target.bannable) {
-            return interaction.reply({
-              content: "I can't ban this member. Check my role position and permissions.",
-              ephemeral: true
-            });
-          }
-
-          await target.ban({ reason });
-        } else {
-          if (!target.kickable) {
-            return interaction.reply({
-              content: "I can't kick this member. Check my role position and permissions.",
-              ephemeral: true
-            });
-          }
-
-          await target.kick(reason);
-        }
-
-        return interaction.reply(
-          `✅ **${user.username}** was ${commandName === "ban" ? "banned" : "kicked"}. Reason: ${reason}`
-        );
-      } catch {
-        return interaction.reply({
-          content: "Action failed. Check bot permissions.",
-          ephemeral: true
-        });
-      }
+    // FUN COMMANDS
+    if (commandName === "coinflip") {
+      return reply(pick(["🪙 Heads!", "🪙 Tails!"]));
     }
 
-    // TIMEOUT
+    if (commandName === "roll") {
+      const sides = interaction.options.getInteger("sides") || 6;
+      return reply(`🎲 You rolled **${1 + Math.floor(Math.random() * sides)}** (1–${sides})`);
+    }
+
+    if (commandName === "8ball") {
+      return reply(pick([
+        "🎱 Definitely!",
+        "🎱 Probably!",
+        "🎱 Ask again later.",
+        "🎱 Not sure!",
+        "🎱 I don't think so.",
+        "🎱 Absolutely not!"
+      ]));
+    }
+
+    if (commandName === "choose") {
+      const options = interaction.options.getString("options")
+        .split(",").map(s => s.trim()).filter(Boolean);
+
+      if (!options.length) return reply("Give me some choices separated by commas.");
+      return reply(`🤔 I choose: **${pick(options)}**`);
+    }
+
+    if (commandName === "joke") {
+      return reply(pick([
+        "😂 Why did the computer get cold? It left its Windows open!",
+        "🤣 Why was the math book sad? It had too many problems.",
+        "😎 My Wi-Fi and I have a connection."
+      ]));
+    }
+
+    if (commandName === "fact") {
+      return reply(pick([
+        "🐙 Octopuses have three hearts.",
+        "🌍 Earth is not a perfect sphere.",
+        "🐝 Bees communicate through movement.",
+        "🪐 Saturn has spectacular rings."
+      ]));
+    }
+
+    if (commandName === "meme") {
+      return reply("😂 Meme time! Search your favourite memes and share one in chat.");
+    }
+
+    if (commandName === "hug" || commandName === "slap" || commandName === "ship") {
+      const user = interaction.options.getUser("user");
+
+      if (commandName === "hug") return reply(`🫂 ${interaction.user} sends a hug to ${user}!`);
+      if (commandName === "slap") return reply(`🤚 ${interaction.user} gives ${user} a playful virtual slap!`);
+      return reply(`💞 Compatibility: **${Math.floor(Math.random() * 101)}%**`);
+    }
+
+    if (commandName === "rate") {
+      return reply(`⭐ I'd rate **${interaction.options.getString("thing")}** ${Math.floor(Math.random() * 101)}/100!`);
+    }
+
+    if (commandName === "reverse") {
+      return reply(interaction.options.getString("text").split("").reverse().join(""));
+    }
+
+    if (commandName === "clap") {
+      return reply(interaction.options.getString("text").split(/\s+/).join(" 👏 "));
+    }
+
+    if (commandName === "emojify") {
+      return reply(interaction.options.getString("text").split("").join(" "));
+    }
+
+    if (commandName === "randomnumber") {
+      const min = interaction.options.getInteger("min");
+      const max = interaction.options.getInteger("max");
+
+      if (min > max) return reply("Minimum cannot be greater than maximum.");
+      return reply(`🎲 **${Math.floor(Math.random() * (max - min + 1)) + min}**`);
+    }
+
+    // MODERATION
+    if (commandName === "kick") {
+      const user = interaction.options.getUser("user");
+      const target = await guild.members.fetch(user.id);
+      const reason = interaction.options.getString("reason") || "No reason provided";
+
+      if (!target.kickable) return reply("❌ I cannot kick this member. Check my role position and permissions.");
+
+      await target.kick(reason);
+      return reply(`👢 Kicked **${user.tag}**. Reason: ${reason}`);
+    }
+
+    if (commandName === "ban") {
+      const user = interaction.options.getUser("user");
+      const target = await guild.members.fetch(user.id);
+      const reason = interaction.options.getString("reason") || "No reason provided";
+
+      if (!target.bannable) return reply("❌ I cannot ban this member. Check my role position and permissions.");
+
+      await target.ban({ reason });
+      return reply(`🔨 Banned **${user.tag}**. Reason: ${reason}`);
+    }
+
     if (commandName === "timeout") {
-      const user = options.getUser("user");
-      const minutes = options.getInteger("minutes");
-      const reason = options.getString("reason") || "No reason provided";
-      const target = await guild.members.fetch(user.id).catch(() => null);
+      const user = interaction.options.getUser("user");
+      const target = await guild.members.fetch(user.id);
+      const minutes = interaction.options.getInteger("minutes");
+      const reason = interaction.options.getString("reason") || "No reason provided";
 
-      if (!target) {
-        return interaction.reply({
-          content: "Member not found.",
-          ephemeral: true
-        });
-      }
-
-      if (user.id === interaction.user.id ||
-          user.id === client.user.id) {
-        return interaction.reply({
-          content: "You can't timeout yourself or the bot.",
-          ephemeral: true
-        });
-      }
-
-      if (target.roles.highest.position >= member.roles.highest.position &&
-          guild.ownerId !== interaction.user.id) {
-        return interaction.reply({
-          content: "You can't timeout someone with an equal or higher role.",
-          ephemeral: true
-        });
-      }
-
-      if (!target.moderatable) {
-        return interaction.reply({
-          content: "I can't timeout that member. Check role positions and permissions.",
-          ephemeral: true
-        });
-      }
+      if (!target.moderatable) return reply("❌ I cannot timeout this member.");
 
       await target.timeout(minutes * 60 * 1000, reason);
-
-      return interaction.reply(
-        `🔇 **${user.username}** timed out for **${minutes} minutes**.`
-      );
+      return reply(`⏳ Timed out **${user.tag}** for ${minutes} minutes.`);
     }
 
-    // WARN
+    if (commandName === "clear") {
+      const amount = interaction.options.getInteger("amount");
+      const messages = await interaction.channel.bulkDelete(amount, true);
+
+      return reply(`🧹 Deleted ${messages.size} messages.`);
+    }
+
     if (commandName === "warn") {
-      const user = options.getUser("user");
-      const reason = options.getString("reason");
+      const user = interaction.options.getUser("user");
+      const reason = interaction.options.getString("reason");
+      const key = `${guild.id}_${user.id}`;
 
-      if (user.id === interaction.user.id ||
-          user.id === client.user.id) {
-        return interaction.reply({
-          content: "You can't warn yourself or the bot.",
-          ephemeral: true
-        });
-      }
-
-      const target = await guild.members.fetch(user.id).catch(() => null);
-
-      if (!target) {
-        return interaction.reply({
-          content: "Member not found.",
-          ephemeral: true
-        });
-      }
-
-      if (target.roles.highest.position >= member.roles.highest.position &&
-          guild.ownerId !== interaction.user.id) {
-        return interaction.reply({
-          content: "You can't warn someone with an equal or higher role.",
-          ephemeral: true
-        });
-      }
-
-      const key = `${guild.id}:${user.id}`;
-
-      data.warnings[key] ||= [];
+      if (!data.warnings[key]) data.warnings[key] = [];
       data.warnings[key].push({
         reason,
         moderator: interaction.user.id,
-        date: new Date().toISOString()
+        time: Date.now()
       });
 
       saveData();
 
-      return interaction.reply(
-        `⚠️ **${user.username}** has been warned. Total warnings: **${data.warnings[key].length}**. Reason: ${reason}`
-      );
+      return reply(`⚠️ Warned **${user.tag}**.\nReason: ${reason}\nTotal warnings: ${data.warnings[key].length}`);
     }
 
-    // WARNINGS
     if (commandName === "warnings") {
-      const user = options.getUser("user");
-      const key = `${guild.id}:${user.id}`;
-      const warnings = data.warnings[key] || [];
+      const user = interaction.options.getUser("user") || interaction.user;
+      const list = getWarnings(guild.id, user.id);
 
-      if (!warnings.length) {
-        return interaction.reply(`${user.username} has no saved warnings.`);
-      }
+      if (!list.length) return reply(`✅ **${user.tag}** has no warnings.`);
 
-      const description = warnings.slice(-10).map((w, i) =>
-        `**${i + 1}.** ${w.reason}\nModerator: <@${w.moderator}>`
-      ).join("\n\n");
-
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xE67E22)
-            .setTitle(`⚠️ Warnings — ${user.username}`)
-            .setDescription(description)
-        ],
-        ephemeral: true
-      });
+      return reply(`⚠️ Warnings for **${user.tag}**:\n` +
+        list.map((w, i) => `${i + 1}. ${w.reason}`).join("\n"));
     }
 
-    // PURGE
-    if (commandName === "purge") {
-      const amount = options.getInteger("amount");
-
-      const messages = await interaction.channel.bulkDelete(amount, true);
-
-      return interaction.reply({
-        content: `🧹 Deleted **${messages.size}** recent messages. Messages older than 14 days may not be deleted.`,
-        ephemeral: true
-      });
+    if (commandName === "clearwarnings") {
+      const user = interaction.options.getUser("user");
+      delete data.warnings[`${guild.id}_${user.id}`];
+      saveData();
+      return reply(`✅ Cleared warnings for **${user.tag}**.`);
     }
 
-    // POLL
-    if (commandName === "poll") {
-      const question = options.getString("question");
-      const optionsList = [
-        options.getString("option1"),
-        options.getString("option2"),
-        options.getString("option3"),
-        options.getString("option4")
-      ].filter(Boolean);
+    // AUTO REPLIES
+    if (commandName === "ai") {
+      data.aiEnabled = interaction.options.getBoolean("enabled");
+      saveData();
 
-      const emojis = ["🇦", "🇧", "🇨", "🇩"];
+      return reply(`🤖 Automatic chat replies are now **${data.aiEnabled ? "enabled" : "disabled"}**.`);
+    }
 
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle(`📊 ${question}`)
-        .setDescription(
-          optionsList.map((option, i) =>
-            `${emojis[i]} ${option}`
-          ).join("\n\n")
-        )
-        .setFooter({ text: `Poll by ${interaction.user.username}` });
+    if (commandName === "addreply") {
+      const trigger = interaction.options.getString("trigger").toLowerCase();
+      const response = interaction.options.getString("response");
 
-      await interaction.reply({ embeds: [embed], fetchReply: true });
+      data.autoReplies[trigger] = response;
+      saveData();
 
-      const pollMessage = await interaction.fetchReply();
+      return reply(`✅ Added auto-reply for **${trigger}**.`);
+    }
 
-      for (let i = 0; i < optionsList.length; i++) {
-        await pollMessage.react(emojis[i]);
+    if (commandName === "removereply") {
+      const trigger = interaction.options.getString("trigger").toLowerCase();
+
+      if (!data.autoReplies[trigger]) return reply("No auto-reply found for that trigger.");
+
+      delete data.autoReplies[trigger];
+      saveData();
+
+      return reply(`✅ Removed auto-reply for **${trigger}**.`);
+    }
+
+    if (commandName === "listreplies") {
+      const keys = Object.keys(data.autoReplies);
+      return reply(keys.length ? `💬 Auto-replies:\n${keys.map(k => `• ${k}`).join("\n")}` : "No auto-replies configured.");
+    }
+
+    // WELCOME SETUP
+    if (commandName === "setwelcome") {
+      const channel = interaction.options.getChannel("channel");
+
+      if (!channel.isTextBased()) return reply("Choose a text channel.");
+      data.welcomeChannel[guild.id] = channel.id;
+      saveData();
+
+      return reply(`✅ Welcome channel set to ${channel}.`);
+    }
+
+    if (commandName === "welcome-toggle") {
+      data.welcomeEnabled[guild.id] = interaction.options.getBoolean("enabled");
+      saveData();
+
+      return reply(`👋 Welcome messages: **${data.welcomeEnabled[guild.id] ? "ON" : "OFF"}**`);
+    }
+
+    // ANNOUNCEMENTS
+    if (commandName === "announce") {
+      const message = interaction.options.getString("message");
+      return interaction.channel.send({ content: `📢 **ANNOUNCEMENT**\n${message}` }).then(() => reply("✅ Announcement sent."));
+    }
+
+    // POLLS
+    if (commandName === "poll" || commandName === "poll-create") {
+      const question = interaction.options.getString("question");
+      const msg = await interaction.channel.send(`📊 **POLL:** ${question}\n\n👍 Yes\n👎 No`);
+      await msg.react("👍");
+      await msg.react("👎");
+
+      return reply("✅ Poll created.");
+    }
+
+    // SAY
+    if (commandName === "say") {
+      return interaction.channel.send(interaction.options.getString("message"))
+        .then(() => reply("✅ Message sent."));
+    }
+
+    // ROLE INFO
+    if (commandName === "roleinfo") {
+      const role = interaction.options.getRole("role");
+      return reply(`🎭 **${role.name}**\nMembers: ${role.members.size}\nID: ${role.id}`);
+    }
+
+    // SLOWMODE
+    if (commandName === "slowmode") {
+      const seconds = interaction.options.getInteger("seconds");
+      await interaction.channel.setRateLimitPerUser(seconds);
+
+      return reply(`🐢 Slowmode set to ${seconds} seconds.`);
+    }
+
+    // LOCK / UNLOCK
+    if (commandName === "lock" || commandName === "unlock") {
+      const locked = commandName === "lock";
+      const everyone = guild.roles.everyone;
+
+      await interaction.channel.permissionOverwrites.edit(everyone, {
+        SendMessages: !locked
+      });
+
+      return reply(locked ? "🔒 Channel locked." : "🔓 Channel unlocked.");
+    }
+
+    // NICKNAME
+    if (commandName === "nickname") {
+      const user = interaction.options.getUser("user");
+      const name = interaction.options.getString("name");
+      const target = await guild.members.fetch(user.id);
+
+      await target.setNickname(name);
+      return reply(`✅ Nickname updated for **${user.tag}**.`);
+    }
+
+    // ROLE MANAGEMENT
+    if (commandName === "role-add" || commandName === "role-remove") {
+      const user = interaction.options.getUser("user");
+      const role = interaction.options.getRole("role");
+      const target = await guild.members.fetch(user.id);
+
+      if (role.managed || role.position >= guild.members.me.roles.highest.position) {
+        return reply("❌ I cannot manage that role. Check my role hierarchy.");
       }
+
+      if (commandName === "role-add") {
+        await target.roles.add(role);
+        return reply(`✅ Added ${role} to **${user.tag}**.`);
+      }
+
+      await target.roles.remove(role);
+      return reply(`✅ Removed ${role} from **${user.tag}**.`);
+    }
+
+    // GIVEAWAY ANNOUNCEMENT
+    if (commandName === "giveaway") {
+      const prize = interaction.options.getString("prize");
+      const minutes = interaction.options.getInteger("minutes");
+
+      const msg = await interaction.channel.send(
+        `🎉 **GIVEAWAY: ${prize}**\nReact with 🎉 to enter!\nEnds <t:${Math.floor((Date.now() + minutes * 60000) / 1000)}:R>`
+      );
+
+      await msg.react("🎉");
+      return reply("✅ Giveaway posted. Note: this version does not automatically pick a winner.");
+    }
+
+    // SUGGESTIONS & FEEDBACK
+    if (commandName === "suggest" || commandName === "feedback") {
+      const textValue =
+        interaction.options.getString("idea") ||
+        interaction.options.getString("message");
+
+      return interaction.channel.send(
+        `💡 **${commandName === "suggest" ? "Suggestion" : "Feedback"}** from ${interaction.user}:\n${textValue}`
+      ).then(() => reply("✅ Submitted."));
+    }
+
+    // INVITE
+    if (commandName === "invite") {
+      const invite = await interaction.channel.createInvite({
+        maxAge: 86400,
+        maxUses: 0
+      });
+
+      return reply(`🔗 ${invite.url}`);
+    }
+
+    // REMINDER
+    if (commandName === "remind") {
+      const minutes = interaction.options.getInteger("minutes");
+      const message = interaction.options.getString("message");
+
+      await reply(`⏰ Reminder set for ${minutes} minutes.`);
+
+      setTimeout(() => {
+        interaction.user.send(`⏰ Reminder: ${message}`).catch(() => {});
+      }, minutes * 60000);
 
       return;
     }
 
-    // ANNOUNCEMENT
-    if (commandName === "announce") {
-      const text = options.getString("message");
-
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle("📢 Announcement")
-        .setDescription(text)
-        .setFooter({ text: `Posted by ${interaction.user.username}` })
-        .setTimestamp();
-
-      return interaction.reply({ embeds: [embed] });
-    }
-
-    // WELCOME CHANNEL SETUP
-    if (commandName === "welcome") {
-      const channel = options.getChannel("channel");
-
-      if (!channel.isTextBased()) {
-        return interaction.reply({
-          content: "Choose a text channel.",
-          ephemeral: true
-        });
-      }
-
-      data.welcomeChannel[guild.id] = channel.id;
-      saveData();
-
-      return interaction.reply(`✅ Welcome channel set to ${channel}.`);
-    }
-
-    // JOKE
-    if (commandName === "joke") {
-      await interaction.deferReply();
-
-      try {
-        const joke = await askGroq(
-          "Tell me one short, funny, clean joke. Do not explain it.",
-          interaction.user.id,
-          interaction.user.username
-        );
-
-        return interaction.editReply(joke.slice(0, 2000));
-      } catch {
-        return interaction.editReply("Couldn't get a joke right now. Try again later.");
-      }
-    }
-
-    // COIN FLIP
-    if (commandName === "coinflip") {
-      return interaction.reply(
-        `🪙 The coin landed on **${Math.random() < 0.5 ? "Heads" : "Tails"}**!`
-      );
-    }
-
-    // EIGHTBALL
-    if (commandName === "eightball") {
-      const answers = [
-        "Yes, definitely! ✅",
-        "Looks good to me. 😎",
-        "Probably!",
-        "Ask me again later. 🤔",
-        "Not sure yet.",
-        "I don't think so.",
-        "Very unlikely. ❌"
-      ];
-
-      return interaction.reply(
-        `🎱 **Question:** ${options.getString("question")}\n${answers[Math.floor(Math.random() * answers.length)]}`
-      );
-    }
+    // COMMANDS WITHOUT A HANDLER YET
+    return reply("This command is registered, but its functionality is not implemented yet.");
 
   } catch (error) {
-    console.error(`Command /${commandName} failed:`, error);
+    console.error(`/${commandName} error:`, error);
 
-    const response = {
-      content: "Something went wrong. Check the bot console and permissions.",
-      ephemeral: true
-    };
-
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp(response).catch(() => {});
-    } else {
-      await interaction.reply(response).catch(() => {});
-    }
+    return reply("❌ Something went wrong. Check the bot permissions and console logs.")
+      .catch(() => {});
   }
 });
 
-// ================= AUTOMATIC WELCOME =================
+// WELCOME EVENT
+client.on(Events.GuildMemberAdd, async member => {
+  if (!data.welcomeEnabled[member.guild.id]) return;
 
-client.on("guildMemberAdd", async member => {
-  try {
-    const channelId = data.welcomeChannel[member.guild.id];
-    if (channelId) {
-      const channel = member.guild.channels.cache.get(channelId);
+  const channelId = data.welcomeChannel[member.guild.id];
+  if (!channelId) return;
 
-      if (channel) {
-        await channel.send(
-          `👋 Welcome ${member} to **${member.guild.name}**! 🎉`
-        );
-      }
-    }
+  const channel = member.guild.channels.cache.get(channelId);
+  if (!channel || !channel.isTextBased()) return;
 
-    const oldInvites = inviteCache.get(member.guild.id) || new Map();
-    const newInvites = await member.guild.invites.fetch();
+  channel.send(
+    `👋 Welcome ${member} to **${member.guild.name}**! 🎉`
+  ).catch(console.error);
+});
 
-    const used = newInvites.find(invite =>
-      (invite.uses || 0) > (oldInvites.get(invite.code) || 0)
-    );
+// AUTOMATIC CHAT REPLIES
+client.on(Events.MessageCreate, async message => {
+  if (message.author.bot || !message.guild || !data.aiEnabled) return;
 
-    if (used && used.inviter && used.inviter.id !== member.id) {
-      const inviterId = used.inviter.id;
-      data.invites[inviterId] = (data.invites[inviterId] || 0) + 1;
-      saveData();
-    }
+  const content = message.content.trim().toLowerCase();
+  const response = data.autoReplies[content];
 
-    inviteCache.set(
-      member.guild.id,
-      new Map(newInvites.map(invite => [invite.code, invite.uses || 0]))
-    );
-  } catch (error) {
-    console.error("Welcome/invite tracking error:", error.message);
+  if (response) {
+    message.reply(response).catch(console.error);
   }
 });
 
-// ================= AI AUTO CHAT =================
-
-client.on("messageCreate", async message => {
-  if (!message.guild || message.author.bot || !data.aiEnabled) return;
-
-  // Do not respond to commands or empty messages.
-  if (message.content.startsWith("/") || !message.content.trim()) return;
-
-  // Only respond to messages with enough text to be a conversation.
-  const text = message.content.trim();
-  if (text.length < 3) return;
-
-  // Per-user cooldown to avoid spamming the channel.
-  const now = Date.now();
-  const lastMessage = cooldowns.get(message.author.id) || 0;
-
-  if (now - lastMessage < 10000) return;
-  cooldowns.set(message.author.id, now);
-
-  // Keep a special greeting for "hi".
-  if (/^(hi|hii|hello|hey|wsp)\b[!. ]*$/i.test(text)) {
-    return message.reply("WSP BRO 😎🔥");
-  }
-
-  // Do not let AI chat with every bot or reply to slash command output.
-  try {
-    await message.channel.sendTyping();
-
-    const answer = await askGroq(
-      text,
-      message.author.id,
-      message.author.username
-    );
-
-    // Split long answers safely.
-    if (answer.length <= 1900) {
-      await message.reply(answer);
-    } else {
-      await message.reply(answer.slice(0, 1900));
-    }
-  } catch (error) {
-    console.error("AI auto-chat error:", error.message);
-    // Do not spam the channel with API errors.
-  }
-});
-
-// ================= START BOT =================
-
-if (!DISCORD_TOKEN) {
-  console.error("Missing DISCORD_TOKEN environment variable.");
-  process.exit(1);
+// LOGIN
+if (!process.env.DISCORD_TOKEN) {
+  console.error("❌ Missing DISCORD_TOKEN environment variable!");
+} else {
+  client.login(process.env.DISCORD_TOKEN);
 }
-
-client.login(DISCORD_TOKEN);

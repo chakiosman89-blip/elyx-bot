@@ -284,3 +284,136 @@ client.on(Events.InteractionCreate, async interaction => {
 });
 
 console.log("✅ AI and GCube interaction handlers loaded.");
+// ============================================
+// ELYX AI — NORMAL CHAT HANDLER
+// ============================================
+
+client.on(Events.MessageCreate, async message => {
+  try {
+    // Ignore bots
+    if (message.author.bot) return;
+
+    if (!client.user) return;
+
+    // Check if user mentions Elyx AI
+    const mentioned = message.mentions.has(client.user.id);
+
+    // Check if user replied to Elyx AI
+    let repliedToBot = false;
+
+    if (message.reference && message.reference.messageId) {
+      const repliedMessage = await message.fetchReference()
+        .catch(() => null);
+
+      if (
+        repliedMessage &&
+        repliedMessage.author.id === client.user.id
+      ) {
+        repliedToBot = true;
+      }
+    }
+
+    // Reply only when mentioned or when replying to the bot
+    if (!mentioned && !repliedToBot) return;
+
+    // AI disabled check
+    if (!data.aiEnabled) {
+      await message.reply(
+        "⚠️ Elyx AI is currently disabled."
+      );
+      return;
+    }
+
+    // Remove bot mention from the message
+    const cleanMessage = message.content
+      .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
+      .trim();
+
+    if (!cleanMessage) {
+      await message.reply(
+        "👋 Haan bhai! Kuch poochna hai toh message kar."
+      );
+      return;
+    }
+
+    await message.channel.sendTyping();
+
+    const reply = await ai.generateReply({
+      data,
+      userId: message.author.id,
+      guildId: message.guildId || "DM",
+      username: message.author.username,
+      message: cleanMessage,
+      saveData
+    });
+
+    const safeReply = String(reply || "Bhai, abhi reply nahi bana.")
+      .slice(0, 1900);
+
+    await message.reply(safeReply);
+
+  } catch (error) {
+    console.error("AI chat error:", error.message);
+
+    await message.reply(
+      "❌ AI reply mein error aaya. Thodi der baad try kar."
+    ).catch(() => {});
+  }
+});
+
+console.log("✅ AI normal chat handler loaded.");
+
+// ============================================
+// REGISTER SLASH COMMANDS + START BOT
+// ============================================
+
+client.once(Events.ClientReady, async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+
+  try {
+    const rest = new REST({ version: "10" })
+      .setToken(process.env.DISCORD_TOKEN);
+
+    const commandList = [...commands.values()]
+      .map(command => command.toJSON());
+
+    if (process.env.GUILD_ID) {
+      // Register commands in your Discord server
+      await rest.put(
+        Routes.applicationGuildCommands(
+          client.user.id,
+          process.env.GUILD_ID
+        ),
+        { body: commandList }
+      );
+
+      console.log("✅ Server slash commands registered.");
+    } else {
+      // Register commands globally
+      await rest.put(
+        Routes.applicationCommands(client.user.id),
+        { body: commandList }
+      );
+
+      console.log(
+        "✅ Global commands registered. They may take time to appear."
+      );
+    }
+
+    console.log(`📋 Registered ${commandList.length} commands.`);
+  } catch (error) {
+    console.error(
+      "❌ Slash command registration failed:",
+      error.message
+    );
+  }
+});
+
+// ============================================
+// LOGIN
+// ============================================
+
+client.login(process.env.DISCORD_TOKEN).catch(error => {
+  console.error("❌ Discord login failed:", error.message);
+});
+

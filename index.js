@@ -23,10 +23,11 @@ const {
   TextInputBuilder,
   TextInputStyle
 } = require("discord.js");
-
-const OpenAI = require("openai");
+ 
+OpenAI = require("openai");
 const fs = require("fs");
 const path = require("path");
+const gcube = require("./games.js");
 
 // Stop early if the Discord token is missing.
 if (!process.env.DISCORD_TOKEN) {

@@ -1836,33 +1836,39 @@ client.once(Events.ClientReady, async () => {
 // BASIC + FUN COMMAND HANDLERS
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
-// GCUBE PARTY COMMANDS
+// GCUBE PARTY SUBCOMMAND HANDLERS
+if (interaction.commandName === "gcube") {
+const subcommand = interaction.options.getSubcommand();
+
 const gcubeHandlers = {
-  "gcube-help": "handleGCubeHelp",
-  "gcube": "handleGCube",
-  "gcube-rewards": "handleGCubeRewards",
-  "gcube-invites": "handleGCubeInvites",
-  "gcube-invite-claim": "handleGCubeInviteClaim",
-  "gcube-quests": "handleGCubeQuests",
-  "gcube-quest-claim": "handleGCubeQuestClaim",
-  "gcube-shop": "handleGCubeShop",
-  "gcube-buy": "handleGCubeBuy",
-  "gcube-collection": "handleGCubeCollection",
-  "gcube-profile": "handleGCubeProfile",
-  "gcube-showcase": "handleGCubeShowcase",
-  "gcube-top": "handleGCubeTop",
-  "gcube-upgrade": "handleGCubeUpgrade",
-  "gcube-pay": "handleGCubePay",
-  "gcube-sell": "handleGCubeSell",
-  "gcube-history": "handleGCubeHistory"
+  balance: ["handleGCubeBalance", "handleGCube"],
+  rewards: ["handleGCubeRewards"],
+  invites: ["handleGCubeInvites", "handleGCubeInvite"],
+  quests: ["handleGCubeQuests"],
+  shop: ["handleGCubeShop"],
+  collection: ["handleGCubeCollection"],
+  profile: ["handleGCubeProfile"],
+  top: ["handleGCubeTop"],
+  showcase: ["handleGCubeShowcase"],
+  history: ["handleGCubeHistory"]
 };
 
-const gcubeHandlerName = gcubeHandlers[interaction.commandName];
+const possibleHandlers = gcubeHandlers[subcommand] || [];
+const handlerName = possibleHandlers.find(
+  name => typeof gcube[name] === "function"
+);
 
-if (gcubeHandlerName && typeof gcube[gcubeHandlerName] === "function") {
-  await gcube[gcubeHandlerName](interaction);
-  return;
+if (!handlerName) {
+  return interaction.reply({
+    content: "❌ Is GCube command ka handler nahi mila.",
+    ephemeral: true
+  });
 }
+
+await gcube[handlerName](interaction);
+return;
+
+                                }
   const { commandName } = interaction;
 
   try {

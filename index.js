@@ -2130,7 +2130,216 @@ if (commandName === "ask") {
         ) + min}**`
       );
     }
+// KBC — VIEW QUESTIONS
+if (commandName === "kbc-questions") {
+const questions = data.kbc?.questions || {};
+const count = Object.keys(questions).length;
 
+  return interaction.reply(
+    `📚 **Elyx KBC**\nQuestions configured: **${count}/12**`
+  );
+}
+
+// KBC — ADD QUESTION
+if (commandName === "kbc-add-question") {
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    return interaction.reply({
+      content: "❌ You need Manage Server permission.",
+      ephemeral: true
+    });
+  }
+
+  const number = interaction.options.getInteger("number");
+  const question = interaction.options.getString("question");
+  const a = interaction.options.getString("a");
+  const b = interaction.options.getString("b");
+  const c = interaction.options.getString("c");
+  const d = interaction.options.getString("d");
+  const correct = interaction.options.getString("correct");
+
+  if (!data.kbc) data.kbc = { questions: {}, games: {} };
+  if (!data.kbc.questions) data.kbc.questions = {};
+  if (!data.kbc.games) data.kbc.games = {};
+
+  data.kbc.questions[number] = {
+    question,
+    options: { A: a, B: b, C: c, D: d },
+    correct
+  };
+
+  saveData();
+
+  return interaction.reply(
+    `✅ KBC Question **${number}/12** saved successfully!`
+  );
+  }
+    // KBC — START GAME
+if (commandName === "kbc") {
+const questions = data.kbc?.questions || {};
+const first = questions[1];
+
+  if (!first) {
+    return interaction.reply({
+      content: "❌ No KBC questions found! An admin must add questions first using `/kbc-add-question`.",
+      ephemeral: true
+    });
+  }
+
+  if (!data.kbc.games) data.kbc.games = {};
+
+  data.kbc.games[interaction.user.id] = {
+    question: 1,
+    prize: 0,
+    lifelines: ["5050", "audience", "phone"],
+    guildId: interaction.guildId
+  };
+
+  saveData();
+
+  return interaction.reply(
+    `🎙️ **ELYX KBC — Question 1/12**\n\n` +
+    `**${first.question}**\n\n` +
+    `🇦 ${first.options.A}\n` +
+    `🇧 ${first.options.B}\n` +
+    `🇨 ${first.options.C}\n` +
+    `🇩 ${first.options.D}\n\n` +
+    `Answer with \`/kbc-answer\`.`
+  );
+}
+
+// KBC — SUBMIT ANSWER
+if (commandName === "kbc-answer") {
+  const game = data.kbc?.games?.[interaction.user.id];
+
+  if (!game) {
+    return interaction.reply({
+      content: "❌ Start a game first using `/kbc`.",
+      ephemeral: true
+    });
+  }
+
+  const questions = data.kbc.questions || {};
+  const current = questions[game.question];
+
+  if (!current) {
+    return interaction.reply({
+      content: "❌ This question is missing. Ask an admin to add it.",
+      ephemeral: true
+    });
+  }
+
+  const answer = interaction.options.getString("answer");
+
+  if (answer !== current.correct) {
+    delete data.kbc.games[interaction.user.id];
+    saveData();
+
+    return interaction.reply(
+      `❌ Wrong answer! The correct answer was **${current.correct}**.\n` +
+      `Game over! Use \`/kbc\` to play again.`
+    );
+  }
+
+  game.prize = game.question;
+  game.question++;
+
+  const next = questions[game.question];
+
+  if (!next) {
+    delete data.kbc.games[interaction.user.id];
+    saveData();
+
+    return interaction.reply(
+      `🎉 **Congratulations!** You completed all configured questions!`
+    );
+  }
+
+  saveData();
+
+  return interaction.reply(
+    `✅ Correct answer!\n\n` +
+    `🎙️ **ELYX KBC — Question ${game.question}/12**\n\n` +
+    `**${next.question}**\n\n` +
+    `🇦 ${next.options.A}\n` +
+    `🇧 ${next.options.B}\n` +
+    `🇨 ${next.options.C}\n` +
+    `🇩 ${next.options.D}`
+  );
+}
+
+// KBC — RESET GAME
+if (commandName === "kbc-reset") {
+  if (data.kbc?.games) {
+    delete data.kbc.games[interaction.user.id];
+  }
+
+  saveData();
+
+  return interaction.reply(
+    "🔄 Your KBC game has been reset. Use `/kbc` to start again."
+  );
+}
+
+// KBC — LIFELINE
+if (commandName === "kbc-lifeline") {
+  const game = data.kbc?.games?.[interaction.user.id];
+
+  if (!game) {
+    return interaction.reply({
+      content: "❌ Start a game first using `/kbc`.",
+      ephemeral: true
+    });
+  }
+
+  const type = interaction.options.getString("type");
+
+  if (!game.lifelines.includes(type)) {
+    return interaction.reply({
+      content: "❌ You have already used this lifeline.",
+      ephemeral: true
+    });
+  }
+
+  game.lifelines = game.lifelines.filter(item => item !== type);
+
+  const current = data.kbc.questions?.[game.question];
+
+  if (!current) {
+    return interaction.reply({
+      content: "❌ Current question not found.",
+      ephemeral: true
+    });
+  }
+
+  saveData();
+
+  if (type === "5050") {
+    const wrong = ["A", "B", "C", "D"]
+      .filter(item => item !== current.correct);
+
+    const removed = wrong.sort(() => Math.random() - 0.5).slice(0, 2);
+
+    return interaction.reply(
+      `🃏 **50:50 Lifeline**\n` +
+      `Correct answer: **${current.correct}**\n` +
+      `Removed options: **${removed.join(", ")}**`
+    );
+  }
+
+  if (type === "audience") {
+    return interaction.reply(
+      `📊 **Audience Poll**\n` +
+      `🇦 ${current.correct === "A" ? "79%" : "7%"}\n` +
+      `🇧 ${current.correct === "B" ? "79%" : "7%"}\n` +
+      `🇨 ${current.correct === "C" ? "79%" : "7%"}\n` +
+      `🇩 ${current.correct === "D" ? "79%" : "7%"}`
+    );
+  }
+
+  return interaction.reply(
+    `📞 **Phone a Friend**\nYour friend thinks the answer might be **${current.correct}**.`
+  );
+  }
     // UPTIME
     if (commandName === "uptime") {
       return interaction.reply(

@@ -532,10 +532,71 @@ client.on(Events.GuildMemberAdd, async member => {
     );
   }
 });
+// ============================================
+// REGISTER ONLY AI + GCUBE COMMANDS
+// ============================================
 
-// ============================================
-// REGISTER COMMANDS
-// ============================================
+client.once(Events.ClientReady, async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+
+  try {
+    const rest = new REST({ version: "10" })
+      .setToken(process.env.DISCORD_TOKEN);
+
+    const commandList = [...commands.values()]
+      .map(command => command.toJSON());
+
+    console.log(`📋 Preparing ${commandList.length} commands...`);
+
+    // Safety check: Discord allows at most 100 commands
+    // in each application command scope.
+    if (commandList.length > 100) {
+      throw new Error(
+        `Too many commands: ${commandList.length}. Maximum is 100.`
+      );
+    }
+
+    // If GUILD_ID is set, register commands for this server
+    // and clear old global commands.
+    if (process.env.GUILD_ID) {
+      await rest.put(
+        Routes.applicationCommands(client.user.id),
+        { body: [] }
+      );
+
+      await rest.put(
+        Routes.applicationGuildCommands(
+          client.user.id,
+          process.env.GUILD_ID
+        ),
+        { body: commandList }
+      );
+
+      console.log("✅ Old global commands cleared.");
+      console.log("✅ AI + GCube server commands registered.");
+    } else {
+      // Replace all global commands with this code's command list.
+      await rest.put(
+        Routes.applicationCommands(client.user.id),
+        { body: commandList }
+      );
+
+      console.log("✅ Global commands replaced.");
+      console.log(
+        "ℹ️ Global commands may take some time to update."
+      );
+    }
+
+    console.log(`✅ Registered ${commandList.length} commands.`);
+
+  } catch (error) {
+    console.error(
+      "❌ Slash command registration failed:",
+      error.message
+    );
+  }
+});
+
 
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);

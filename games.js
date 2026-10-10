@@ -231,8 +231,58 @@ module.exports = {
 // ==========================================
 
 const gcubeBalanceCommand = new SlashCommandBuilder()
-  .setName("gcube")
-  .setDescription("Apna GCube balance check karo");
+.setName("gcube")
+.setDescription("GCube Party ke saare commands")
+.addSubcommand(sub =>
+sub
+.setName("balance")
+.setDescription("Apna GCube balance check karo")
+)
+.addSubcommand(sub =>
+sub
+.setName("rewards")
+.setDescription("Daily rewards aur message progress dekho")
+)
+.addSubcommand(sub =>
+sub
+.setName("invites")
+.setDescription("Apne invites aur rewards dekho")
+)
+.addSubcommand(sub =>
+sub
+.setName("quests")
+.setDescription("Available quests dekho")
+)
+.addSubcommand(sub =>
+sub
+.setName("shop")
+.setDescription("GCube shop dekho")
+)
+.addSubcommand(sub =>
+sub
+.setName("collection")
+.setDescription("Apni collection dekho")
+)
+.addSubcommand(sub =>
+sub
+.setName("profile")
+.setDescription("Apna GCube profile dekho")
+)
+.addSubcommand(sub =>
+sub
+.setName("top")
+.setDescription("GCube leaderboard dekho")
+)
+.addSubcommand(sub =>
+sub
+.setName("showcase")
+.setDescription("Apna showcase dekho")
+)
+.addSubcommand(sub =>
+sub
+.setName("history")
+.setDescription("Recent GCube transactions dekho")
+);
 
 const gcubeRewardsCommand = new SlashCommandBuilder()
   .setName("gcube-rewards")

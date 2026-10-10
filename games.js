@@ -1449,72 +1449,7 @@ function handleGCubeUpgrade(interaction) {
   if (!upgrade) {
     return interaction.reply({
       content: "❌ This collectible has no upgrade path yet.",
-      ephemeral: true
-    });
-  }
 
-  const materialIndex = inventory.findIndex(material =>
-    material.name === upgrade.material
-  );
-
-  if (materialIndex === -1) {
-    return interaction.reply({
-      content:
-        `❌ You need **${upgrade.amount} ${upgrade.material}** to upgrade **${item.name}**.`,
-      ephemeral: true
-    });
-  }
-
-  if ((Number(user.balance) || 0) < upgrade.cost) {
-    return interaction.reply({
-      content: `❌ You need **${upgrade.cost} GC** for this upgrade.`,
-      ephemeral: true
-    });
-  }
-
-  // Deduct the upgrade fee.
-  if (!spendGC(data, user, upgrade.cost)) {
-    return interaction.reply({
-      content: "❌ Not enough GC.",
-      ephemeral: true
-    });
-  }
-
-  // Consume the required material.
-  inventory.splice(materialIndex, 1);
-
-  // Upgrade the existing collectible instead of creating a duplicate.
-  item.name = upgrade.next;
-  item.rarity = upgrade.rarity;
-  item.emoji = upgrade.emoji;
-  item.level = (Number(item.level) || 1) + 1;
-  item.upgradedAt = new Date().toISOString();
-
-  data.gcubeParty.history.push({
-    userId: interaction.user.id,
-    type: "upgrade",
-    item: item.name,
-    cost: upgrade.cost,
-    date: new Date().toISOString()
-  });
-
-  saveData(data);
-
-  const embed = makeEmbed(
-    "✨ Collectible Upgraded!",
-    `${upgrade.emoji} **${item.name}**\n\n` +
-    `💎 Rarity: **${item.rarity}**\n` +
-    `⭐ Level: **${item.level}**\n` +
-    `💰 Upgrade fee: **${upgrade.cost} GC**\n` +
-    `🧪 Material used: **${upgrade.material}**`
-  );
-
-  return interaction.reply({ embeds: [embed] });
-}
-
-module.exports.gcubeUpgradeCommand = gcubeUpgradeCommand;
-module.exports.gcubeUpgradeCommand = gcubeUpgradeCommand;
-module.exports.handleGCubeUpgrade = handleGCubeUpgrade;
 // ========================================
 // GCUBE PARTY — PART 9
 // GC TRANSFER + ITEM SELLING
@@ -1582,17 +1517,102 @@ function handleGCubePay(interaction) {
     return interaction.reply({
       content: "❌ Transfer failed: insufficient balance.",
       ephemeral: true
+
+        // ========================================
+// GCUBE PARTY — PART 9
+// GC TRANSFER + ITEM SELLING
+// ========================================
+
+// TRANSFER GC
+const gcubePayCommand = new SlashCommandBuilder()
+  .setName("gcube-pay")
+  .setDescription("Send GC to another player")
+  .addUserOption(option =>
+    option.setName("user")
+      .setDescription("Player receiving GC")
+      .setRequired(true)
+  )
+  .addIntegerOption(option =>
+    option.setName("amount")
+      .setDescription("Amount of GC to send")
+      .setMinValue(1)
+      .setRequired(true)
+  );
+
+// SELL A COLLECTIBLE
+const gcubeSellCommand = new SlashCommandBuilder()
+  .setName("gcube-sell")
+  .setDescription("Sell one of your collectibles")
+  .addStringOption(option =>
+    option.setName("item")
+      .setDescription("Exact name of the collectible")
+      .setRequired(true)
+  );
+
+// TRANSFER GC SAFELY
+function handleGCubePay(interaction) {
+  const data = loadData();
+
+  const senderId = interaction.user.id;
+  const receiver = interaction.options.getUser("user");
+  const amount = interaction.options.getInteger("amount");
+
+  if (!receiver || receiver.bot || receiver.id === senderId) {
+    return interaction.reply({
+      content: "❌ You can't send GC to yourself or a bot.",
+      ephemeral: true
     });
   }
 
-  addGC(data, recipient, amount);
+  if (!Number.isSafeInteger(amount) || amount < 1) {
+    return interaction.reply({
+      content: "❌ Enter a valid positive amount.",
+      ephemeral: true
+    });
+  }
+
+  const sender = getUser(data, senderId);
+  const recipient = getUser(data, receiver.id);
+
+  if ((Number(sender.balance) || 0) < amount) {
+    return interaction.reply({
+      content: "❌ You don't have enough GC.",
+      ephemeral: true
+    });
+  }
+
+  // Deduct GC from sender.
+  if (!spendGC(sender, amount)) {
+    return interaction.reply({
+      content: "❌ Transfer failed: insufficient balance.",
+      ephemeral: true
+    });
+  }
+
+  // Add GC to receiver.
+  addGC(recipient, amount);
+
+  if (!data.gcubeParty) {
+    data.gcubeParty = {
+      users: {},
+      trades: {},
+      inviteTracking: {},
+      history: []
+    };
+  }
+
+  if (!Array.isArray(data.gcubeParty.history)) {
+    data.gcubeParty.history = [];
+  }
+
+  const timestamp = new Date().toISOString();
 
   data.gcubeParty.history.push({
     type: "transfer_sent",
     userId: senderId,
     targetId: receiver.id,
     amount,
-    date: new Date().toISOString()
+    date: timestamp
   });
 
   data.gcubeParty.history.push({
@@ -1600,7 +1620,7 @@ function handleGCubePay(interaction) {
     userId: receiver.id,
     targetId: senderId,
     amount,
-    date: new Date().toISOString()
+    date: timestamp
   });
 
   saveData(data);
@@ -1609,11 +1629,13 @@ function handleGCubePay(interaction) {
     content:
       `✅ <@${senderId}> sent **${amount} GC** to ${receiver}!\n` +
       `💰 Your remaining balance: **${sender.balance} GC**`,
-    allowedMentions: { users: [senderId, receiver.id] }
+    allowedMentions: {
+      users: [senderId, receiver.id]
+    }
   });
 }
 
-// Sell collectible for 50% of its recorded purchase price.
+// SELL COLLECTIBLE FOR 50% OF ITS RECORDED PURCHASE PRICE.
 function handleGCubeSell(interaction) {
   const data = loadData();
   const user = getUser(data, interaction.user.id);
@@ -1625,6 +1647,8 @@ function handleGCubeSell(interaction) {
   const inventory = user.collection || [];
 
   const itemIndex = inventory.findIndex(item =>
+    item &&
+    typeof item.name === "string" &&
     item.name.toLowerCase() === requestedName.toLowerCase()
   );
 
@@ -1642,8 +1666,22 @@ function handleGCubeSell(interaction) {
   // Remove only the item being sold.
   inventory.splice(itemIndex, 1);
 
+  // Give the user their selling payment.
   if (sellPrice > 0) {
-    addGC(data, user, sellPrice);
+    addGC(user, sellPrice);
+  }
+
+  if (!data.gcubeParty) {
+    data.gcubeParty = {
+      users: {},
+      trades: {},
+      inviteTracking: {},
+      history: []
+    };
+  }
+
+  if (!Array.isArray(data.gcubeParty.history)) {
+    data.gcubeParty.history = [];
   }
 
   data.gcubeParty.history.push({
@@ -1664,6 +1702,7 @@ function handleGCubeSell(interaction) {
   });
 }
 
+// EXPORT COMMANDS AND HANDLERS
 module.exports.gcubePayCommand = gcubePayCommand;
 module.exports.gcubeSellCommand = gcubeSellCommand;
 module.exports.handleGCubePay = handleGCubePay;

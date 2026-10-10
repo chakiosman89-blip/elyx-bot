@@ -1,6 +1,5 @@
 // ============================================
-// ELYX AI ULTIMATE + GCUBE PARTY
-// Created for Elyx Trading
+// ELYX TRADING — AI + GCUBE PARTY
 // Main File: index.js
 // ============================================
 
@@ -18,10 +17,6 @@ const {
 
 const fs = require("fs");
 const path = require("path");
-
-// ============================================
-// CONNECT AI AND GCUBE SYSTEMS
-// ============================================
 
 const ai = require("./ai.js");
 const gcube = require("./games.js");
@@ -43,7 +38,8 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
   ],
   partials: [
     Partials.Channel,
@@ -53,26 +49,20 @@ const client = new Client({
 
 // ============================================
 // DATA STORAGE
-// Preserve existing data.json
+// Preserve AI and GCube data
 // ============================================
 
 const DATA_FILE = path.join(__dirname, "data.json");
 
 function loadData() {
   try {
-    if (!fs.existsSync(DATA_FILE)) {
-      return {
-        aiEnabled: true,
-        aiChannels: {},
-        aiChats: {},
-        aiMemory: {},
-        settings: {}
-      };
-    }
+    let saved = {};
 
-    const saved = JSON.parse(
-      fs.readFileSync(DATA_FILE, "utf8")
-    );
+    if (fs.existsSync(DATA_FILE)) {
+      saved = JSON.parse(
+        fs.readFileSync(DATA_FILE, "utf8")
+      );
+    }
 
     return {
       aiEnabled: true,
@@ -94,15 +84,39 @@ function saveData() {
   try {
     const tempFile = `${DATA_FILE}.tmp`;
 
+    // Read the latest saved file first
+    let existingData = {};
+
+    if (fs.existsSync(DATA_FILE)) {
+      existingData = JSON.parse(
+        fs.readFileSync(DATA_FILE, "utf8")
+      );
+    }
+
+    // Merge AI data without deleting other saved data
+    const safeData = {
+      ...existingData,
+      ...data
+    };
+
+    // Keep the latest GCube data saved by games.js
+    if (existingData.gcubeParty) {
+      safeData.gcubeParty = existingData.gcubeParty;
+    }
+
     fs.writeFileSync(
       tempFile,
-      JSON.stringify(data, null, 2),
+      JSON.stringify(safeData, null, 2),
       "utf8"
     );
 
     fs.renameSync(tempFile, DATA_FILE);
+
   } catch (error) {
-    console.error("❌ Could not save data.json:", error.message);
+    console.error(
+      "❌ Could not save data.json:",
+      error.message
+    );
   }
 }
 
@@ -133,13 +147,10 @@ function addCommand(command) {
   commands.set(json.name, command);
 }
 
-console.log("✅ Elyx AI main file initialized.");
-console.log("🎮 GCube Party module detected.");
 // ============================================
-// ELYX AI — SLASH COMMANDS
+// AI COMMANDS
 // ============================================
 
-// AI ON / OFF
 addCommand(
   new SlashCommandBuilder()
     .setName("ai")
@@ -152,7 +163,6 @@ addCommand(
     )
 );
 
-// ASK AI
 addCommand(
   new SlashCommandBuilder()
     .setName("ask")
@@ -166,7 +176,6 @@ addCommand(
     )
 );
 
-// AI MEMORY
 addCommand(
   new SlashCommandBuilder()
     .setName("memory")
@@ -183,7 +192,6 @@ addCommand(
     )
 );
 
-// AI STATUS
 addCommand(
   new SlashCommandBuilder()
     .setName("aistatus")
@@ -191,12 +199,68 @@ addCommand(
 );
 
 // ============================================
-// COMMAND DEFINITIONS COMPLETE
+// GCUBE COMMAND REGISTRATION
 // ============================================
 
-console.log("✅ Elyx AI command definitions loaded.");
+const gcubeCommandNames = [
+  "gcubeHelpCommand",
+  "gcubeBalanceCommand",
+  "gcubeRewardsCommand",
+  "gcubeInviteRewardsCommand",
+  "gcubeInviteClaimCommand",
+  "gcubeQuestsCommand",
+  "gcubeQuestClaimCommand",
+  "gcubeShopCommand",
+  "gcubeBuyCommand",
+  "gcubeCollectionCommand",
+  "gcubeProfileCommand",
+  "gcubeShowcaseCommand",
+  "gcubeTopCommand",
+  "gcubeUpgradeCommand",
+  "gcubePayCommand",
+  "gcubeSellCommand",
+  "gcubeHistoryCommand"
+];
+
+for (const name of gcubeCommandNames) {
+  const command = gcube[name];
+
+  if (command && typeof command.toJSON === "function") {
+    addCommand(command);
+    console.log(`✅ Loaded /${command.name}`);
+  } else {
+    console.warn(
+      `⚠️ GCube command missing or not exported: ${name}`
+    );
+  }
+}
+
 // ============================================
-// ELYX AI + GCUBE PARTY HANDLERS
+// GCUBE STANDALONE COMMAND HANDLERS
+// ============================================
+
+const gcubeHandlers = {
+  "gcube-help": "handleGCubeHelp",
+  "gcube-rewards": "handleGCubeRewards",
+  "gcube-invites": "handleGCubeInvites",
+  "gcube-invite-claim": "handleGCubeInviteClaim",
+  "gcube-quests": "handleGCubeQuests",
+  "gcube-quest-claim": "handleGCubeQuestClaim",
+  "gcube-shop": "handleGCubeShop",
+  "gcube-buy": "handleGCubeBuy",
+  "gcube-collection": "handleGCubeCollection",
+  "gcube-profile": "handleGCubeProfile",
+  "gcube-showcase": "handleGCubeShowcase",
+  "gcube-top": "handleGCubeTop",
+  "gcube-upgrade": "handleGCubeUpgrade",
+  "gcube-pay": "handleGCubePay",
+  "gcube-sell": "handleGCubeSell",
+  "gcube-history": "handleGCubeHistory"
+};
+
+// ============================================
+// INTERACTION HANDLER
+// AI + GCUBE SLASH COMMANDS
 // ============================================
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -205,16 +269,19 @@ client.on(Events.InteractionCreate, async interaction => {
   const commandName = interaction.commandName;
 
   try {
-    // ========================================
+    // ----------------------------------------
     // AI COMMANDS
-    // ========================================
+    // ----------------------------------------
 
-    if (["ai", "ask", "memory", "aistatus"].includes(commandName)) {
+    if (
+      ["ai", "ask", "memory", "aistatus"].includes(commandName)
+    ) {
       if (typeof ai.handleCommand !== "function") {
-        return interaction.reply({
-          content: "⚠️ AI module is not ready yet. Please try again later.",
+        await interaction.reply({
+          content: "⚠️ AI module is not ready.",
           ephemeral: true
         });
+        return;
       }
 
       await ai.handleCommand(interaction, {
@@ -226,52 +293,73 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // ========================================
-    // GCUBE PARTY
-    // ========================================
+    // ----------------------------------------
+    // GCUBE ROOT COMMAND
+    // /gcube balance, rewards, invites, etc.
+    // ----------------------------------------
 
     if (commandName === "gcube") {
       const subcommand = interaction.options.getSubcommand();
 
-      const gcubeHandlers = {
-        balance: ["handleGCubeBalance", "handleGCube"],
-        rewards: ["handleGCubeRewards"],
-        invites: ["handleGCubeInvites", "handleGCubeInvite"],
-        quests: ["handleGCubeQuests"],
-        shop: ["handleGCubeShop"],
-        collection: ["handleGCubeCollection"],
-        profile: ["handleGCubeProfile"],
-        top: ["handleGCubeTop"],
-        showcase: ["handleGCubeShowcase"],
-        history: ["handleGCubeHistory"]
+      const rootHandlers = {
+        balance: "handleGCubeBalance",
+        rewards: "handleGCubeRewards",
+        invites: "handleGCubeInvites",
+        quests: "handleGCubeQuests",
+        shop: "handleGCubeShop",
+        collection: "handleGCubeCollection",
+        profile: "handleGCubeProfile",
+        top: "handleGCubeTop",
+        showcase: "handleGCubeShowcase",
+        history: "handleGCubeHistory"
       };
 
-      const possibleHandlers = gcubeHandlers[subcommand] || [];
+      const handlerName = rootHandlers[subcommand];
+      const handler = handlerName ? gcube[handlerName] : null;
 
-      const handlerName = possibleHandlers.find(
-        name => typeof gcube[name] === "function"
-      );
+      if (typeof handler !== "function") {
+        await interaction.reply({
+          content:
+            "⚠️ This GCube subcommand is missing or not exported.",
+          ephemeral: true
+        });
+        return;
+      }
 
-      if (!handlerName) {
-        return interaction.reply({
+      await handler(interaction);
+      return;
+    }
+
+    // ----------------------------------------
+    // GCUBE STANDALONE COMMANDS
+    // ----------------------------------------
+
+    const handlerName = gcubeHandlers[commandName];
+
+    if (handlerName) {
+      const handler = gcube[handlerName];
+
+      if (typeof handler !== "function") {
+        await interaction.reply({
           content:
             "⚠️ This GCube command handler is not available yet.",
           ephemeral: true
         });
+        return;
       }
 
-      await gcube[handlerName](interaction);
+      await handler(interaction);
       return;
     }
 
   } catch (error) {
     console.error(
-      `Command /${commandName} failed:`,
+      `❌ Command /${commandName} failed:`,
       error
     );
 
     const reply = {
-      content: "❌ Something went wrong. Please try again.",
+      content: "❌ Command error. Please try again.",
       ephemeral: true
     };
 
@@ -283,25 +371,21 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-console.log("✅ AI and GCube interaction handlers loaded.");
 // ============================================
-// ELYX AI — NORMAL CHAT HANDLER
+// AI NORMAL CHAT
+// Reply when mentioned or when replied to
 // ============================================
 
 client.on(Events.MessageCreate, async message => {
   try {
-    // Ignore bots
     if (message.author.bot) return;
-
     if (!client.user) return;
 
-    // Check if user mentions Elyx AI
     const mentioned = message.mentions.has(client.user.id);
 
-    // Check if user replied to Elyx AI
     let repliedToBot = false;
 
-    if (message.reference && message.reference.messageId) {
+    if (message.reference?.messageId) {
       const repliedMessage = await message.fetchReference()
         .catch(() => null);
 
@@ -313,10 +397,8 @@ client.on(Events.MessageCreate, async message => {
       }
     }
 
-    // Reply only when mentioned or when replying to the bot
     if (!mentioned && !repliedToBot) return;
 
-    // AI disabled check
     if (!data.aiEnabled) {
       await message.reply(
         "⚠️ Elyx AI is currently disabled."
@@ -324,9 +406,11 @@ client.on(Events.MessageCreate, async message => {
       return;
     }
 
-    // Remove bot mention from the message
     const cleanMessage = message.content
-      .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
+      .replace(
+        new RegExp(`<@!?${client.user.id}>`, "g"),
+        ""
+      )
       .trim();
 
     if (!cleanMessage) {
@@ -347,13 +431,13 @@ client.on(Events.MessageCreate, async message => {
       saveData
     });
 
-    const safeReply = String(reply || "Bhai, abhi reply nahi bana.")
-      .slice(0, 1900);
-
-    await message.reply(safeReply);
+    await message.reply(
+      String(reply || "Bhai, abhi reply nahi bana.")
+        .slice(0, 1900)
+    );
 
   } catch (error) {
-    console.error("AI chat error:", error.message);
+    console.error("❌ AI chat error:", error.message);
 
     await message.reply(
       "❌ AI reply mein error aaya. Thodi der baad try kar."
@@ -361,10 +445,96 @@ client.on(Events.MessageCreate, async message => {
   }
 });
 
-console.log("✅ AI normal chat handler loaded.");
+// ============================================
+// GCUBE MESSAGE COUNTER
+// ============================================
+
+client.on(Events.MessageCreate, async message => {
+  if (message.author.bot || !message.guild) return;
+
+  if (typeof gcube.handleGCubeMessage !== "function") {
+    return;
+  }
+
+  try {
+    await gcube.handleGCubeMessage(message);
+  } catch (error) {
+    console.error(
+      "❌ GCube message counter error:",
+      error.message
+    );
+  }
+});
 
 // ============================================
-// REGISTER SLASH COMMANDS + START BOT
+// GCUBE BUTTON HANDLERS
+// ============================================
+
+client.on(Events.InteractionCreate, async interaction => {
+  if (!interaction.isButton()) return;
+
+  try {
+    if (
+      interaction.customId.startsWith("gcube_rewards_") &&
+      typeof gcube.handleGCubeRewardButton === "function"
+    ) {
+      await gcube.handleGCubeRewardButton(interaction);
+      return;
+    }
+
+    if (
+      interaction.customId.startsWith("gcube_quests_") &&
+      typeof gcube.handleGCubeQuestButton === "function"
+    ) {
+      await gcube.handleGCubeQuestButton(interaction);
+    }
+
+  } catch (error) {
+    console.error("❌ GCube button error:", error);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: "❌ Button use karte waqt error aaya.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+});
+
+// ============================================
+// GCUBE INVITE TRACKING
+// ============================================
+
+client.once(Events.ClientReady, async () => {
+  for (const guild of client.guilds.cache.values()) {
+    if (typeof gcube.cacheGuildInvites === "function") {
+      try {
+        await gcube.cacheGuildInvites(guild);
+      } catch (error) {
+        console.error(
+          `❌ Could not cache invites for ${guild.name}:`,
+          error.message
+        );
+      }
+    }
+  }
+});
+
+client.on(Events.GuildMemberAdd, async member => {
+  if (typeof gcube.handleGCubeMemberJoin !== "function") return;
+
+  try {
+    await gcube.handleGCubeMemberJoin(client, member);
+  } catch (error) {
+    console.error(
+      "❌ GCube invite tracking error:",
+      error.message
+    );
+  }
+});
+
+// ============================================
+// REGISTER COMMANDS
 // ============================================
 
 client.once(Events.ClientReady, async () => {
@@ -378,7 +548,6 @@ client.once(Events.ClientReady, async () => {
       .map(command => command.toJSON());
 
     if (process.env.GUILD_ID) {
-      // Register commands in your Discord server
       await rest.put(
         Routes.applicationGuildCommands(
           client.user.id,
@@ -389,7 +558,6 @@ client.once(Events.ClientReady, async () => {
 
       console.log("✅ Server slash commands registered.");
     } else {
-      // Register commands globally
       await rest.put(
         Routes.applicationCommands(client.user.id),
         { body: commandList }
@@ -401,6 +569,7 @@ client.once(Events.ClientReady, async () => {
     }
 
     console.log(`📋 Registered ${commandList.length} commands.`);
+
   } catch (error) {
     console.error(
       "❌ Slash command registration failed:",
@@ -410,10 +579,11 @@ client.once(Events.ClientReady, async () => {
 });
 
 // ============================================
-// LOGIN
+// LOGIN — KEEP THIS AT THE END
 // ============================================
+
+console.log("🤖 Starting Elyx Trading bot...");
 
 client.login(process.env.DISCORD_TOKEN).catch(error => {
   console.error("❌ Discord login failed:", error.message);
 });
-

@@ -1805,17 +1805,9 @@ for (const name of gcubeCommandNames) {
 // ============================================
 
 // REGISTER ALL SLASH COMMANDS
-// AUTO-REGISTER GCUBE SLASH COMMANDS
-for (const item of Object.values(gcube)) {
-  if (
-    item &&
-    typeof item.toJSON === "function" &&
-    typeof item.name === "string" &&
-    item.name.startsWith("gcube") &&
-    !commands.some(command => command.name === item.name)
-  ) {
-    addCommand(item);
-  }
+// REGISTER ONLY GCUBE MAIN COMMAND
+if (gcube.gcubeBalanceCommand) {
+  addCommand(gcube.gcubeBalanceCommand);
 }
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);

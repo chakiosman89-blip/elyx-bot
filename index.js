@@ -1768,6 +1768,39 @@ client.on(Events.GuildMemberRemove, async member => {
 
 console.log("Elyx Trading: Part 13 loaded.");
 // ============================================
+// GCUBE PARTY — REGISTER SLASH COMMANDS
+// ============================================
+
+const gcubeCommandNames = [
+  "gcubeHelpCommand",
+  "gcubeCommand",
+  "gcubeRewardsCommand",
+  "gcubeInvitesCommand",
+  "gcubeInviteClaimCommand",
+  "gcubeQuestsCommand",
+  "gcubeQuestClaimCommand",
+  "gcubeShopCommand",
+  "gcubeBuyCommand",
+  "gcubeCollectionCommand",
+  "gcubeProfileCommand",
+  "gcubeShowcaseCommand",
+  "gcubeTopCommand",
+  "gcubeUpgradeCommand",
+  "gcubePayCommand",
+  "gcubeSellCommand",
+  "gcubeHistoryCommand"
+];
+
+for (const name of gcubeCommandNames) {
+  const command = gcube[name];
+
+  if (command && typeof command.toJSON === "function") {
+    addCommand(command);
+  } else {
+    console.warn(`GCube command export missing: ${name}`);
+  }
+}
+// ============================================
 // PART 14/15 — BOT STARTUP & BASIC COMMANDS
 // ============================================
 
@@ -1799,7 +1832,33 @@ client.once(Events.ClientReady, async () => {
 // BASIC + FUN COMMAND HANDLERS
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
+// GCUBE PARTY COMMANDS
+const gcubeHandlers = {
+  "gcube-help": "handleGCubeHelp",
+  "gcube": "handleGCube",
+  "gcube-rewards": "handleGCubeRewards",
+  "gcube-invites": "handleGCubeInvites",
+  "gcube-invite-claim": "handleGCubeInviteClaim",
+  "gcube-quests": "handleGCubeQuests",
+  "gcube-quest-claim": "handleGCubeQuestClaim",
+  "gcube-shop": "handleGCubeShop",
+  "gcube-buy": "handleGCubeBuy",
+  "gcube-collection": "handleGCubeCollection",
+  "gcube-profile": "handleGCubeProfile",
+  "gcube-showcase": "handleGCubeShowcase",
+  "gcube-top": "handleGCubeTop",
+  "gcube-upgrade": "handleGCubeUpgrade",
+  "gcube-pay": "handleGCubePay",
+  "gcube-sell": "handleGCubeSell",
+  "gcube-history": "handleGCubeHistory"
+};
 
+const gcubeHandlerName = gcubeHandlers[interaction.commandName];
+
+if (gcubeHandlerName && typeof gcube[gcubeHandlerName] === "function") {
+  await gcube[gcubeHandlerName](interaction);
+  return;
+}
   const { commandName } = interaction;
 
   try {

@@ -70,7 +70,7 @@ const ai = process.env.GROQ_API_KEY
   : null;
 
 const AI_MODEL =
-  process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+  process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 // ============================================
 // DATA STORAGE
@@ -1802,6 +1802,58 @@ client.on(Events.InteractionCreate, async interaction => {
   const { commandName } = interaction;
 
   try {
+    // AI ON/OFF
+if (commandName === "ai") {
+  const enabled = interaction.options.getBoolean("enabled");
+  data.aiEnabled = enabled;
+  saveData();
+
+  return interaction.reply(
+    `🤖 Automatic AI replies are now **${enabled ? "enabled" : "disabled"}**.`
+  );
+}
+
+// ASK AI
+if (commandName === "ask") {
+  if (!ai) {
+    return interaction.reply({
+      content: "❌ GROQ_API_KEY missing in FadeHost.",
+      ephemeral: true
+    });
+  }
+
+  await interaction.deferReply();
+
+  try {
+    const question = interaction.options.getString("question");
+
+    const completion = await ai.chat.completions.create({
+      model: AI_MODEL,
+      messages: [
+        {
+          role: "system",
+          content: "You are Elyx, a friendly and helpful Discord assistant. Give clear, concise answers."
+        },
+        {
+          role: "user",
+          content: question.slice(0, 3000)
+        }
+      ],
+      max_tokens: 500
+    });
+
+    const answer = completion.choices?.[0]?.message?.content?.trim();
+
+    return interaction.editReply(
+      answer || "I couldn't generate a reply. Try again."
+    );
+  } catch (error) {
+    console.error("AI command error:", error.message);
+    return interaction.editReply(
+      "❌ AI error. Check the FadeHost console."
+    );
+  }
+}
     // HELP
     if (commandName === "help") {
       const commandList = commands

@@ -1364,6 +1364,7 @@ module.exports.gcubeShowcaseCommand = gcubeShowcaseCommand;
 module.exports.gcubeTopCommand = gcubeTopCommand;
 module.exports.handleGCubeShowcase = handleGCubeShowcase;
 module.exports.handleGCubeTop = handleGCubeTop;
+
 // ===============================
 // GCUBE PARTY — PART 8
 // COLLECTIBLE UPGRADE SYSTEM
@@ -1449,6 +1450,58 @@ function handleGCubeUpgrade(interaction) {
   if (!upgrade) {
     return interaction.reply({
       content: "❌ This collectible has no upgrade path yet.",
+      ephemeral: true
+    });
+  }
+
+  const materials = user.materials || {};
+  const ownedMaterials = Number(materials[upgrade.material]) || 0;
+
+  if (ownedMaterials < upgrade.amount) {
+    return interaction.reply({
+      content: `❌ You need ${upgrade.amount} ${upgrade.material} to upgrade this collectible.`,
+      ephemeral: true
+    });
+  }
+
+  if ((Number(user.balance) || 0) < upgrade.cost) {
+    return interaction.reply({
+      content: `❌ You need ${upgrade.cost} GC to upgrade this collectible.`,
+      ephemeral: true
+    });
+  }
+
+  if (!spendGC(data, user, upgrade.cost)) {
+    return interaction.reply({
+      content: "❌ Upgrade failed: insufficient GC.",
+      ephemeral: true
+    });
+  }
+
+  materials[upgrade.material] = ownedMaterials - upgrade.amount;
+  user.materials = materials;
+
+  inventory[itemIndex] = {
+    ...item,
+    name: upgrade.next,
+    rarity: upgrade.rarity,
+    emoji: upgrade.emoji
+  };
+
+  user.collection = inventory;
+
+  if (typeof saveData === "function") {
+    saveData(data);
+  }
+
+  return interaction.reply({
+    content: `✅ Upgrade successful!\n${item.name} ➜ ${upgrade.emoji} **${upgrade.next}**\nCost: **${upgrade.cost} GC**`,
+    ephemeral: true
+  });
+}
+
+module.exports.gcubeUpgradeCommand = gcubeUpgradeCommand;
+module.exports.handleGCubeUpgrade = handleGCubeUpgrade;
 
 // ========================================
 // GCUBE PARTY — PART 9

@@ -2420,3 +2420,325 @@ module.exports.gcubeVisualRecordShowcaseView = gcubeVisualRecordShowcaseView;
 module.exports.gcubeVisualCreateClan = gcubeVisualCreateClan;
 
 console.log("✅ GCube Visual Collection Part 2 loaded.");
+
+// ============================================================
+// ELYX TRADING — GCUBE PARTY
+// PART 3: VISUAL SHOP + BUY + EQUIP + COLLECTION
+// Paste at the VERY END of games.js
+// ============================================================
+
+const GCUBE_V3_ITEMS = [
+  "crown",
+  "diamond",
+  "crystal",
+  "trophy",
+  "dragon"
+];
+
+// ------------------------------------------------------------
+// SAFETY CHECK
+// ------------------------------------------------------------
+
+if (
+  typeof gcubeCommand === "undefined" ||
+  typeof gcubeSubcommandHandlers === "undefined"
+) {
+  throw new Error(
+    "[GCube V3] Existing GCube system was not found."
+  );
+}
+
+if (
+  typeof GCUBE_VISUAL_CATALOG === "undefined" ||
+  typeof gcubeVisualAddItem !== "function" ||
+  typeof gcubeVisualEquipItem !== "function" ||
+  typeof gcubeVisualGetInventoryEmbed !== "function"
+) {
+  throw new Error(
+    "[GCube V3] Paste Visual Upgrade Parts 1 and 2 first."
+  );
+}
+
+// ------------------------------------------------------------
+// ADD NEW SLASH COMMANDS
+// Existing /gcube shop and /gcube collection are reused.
+// ------------------------------------------------------------
+
+gcubeCommand.addSubcommand(sub =>
+  sub
+    .setName("buy")
+    .setDescription("Purchase a GCube collectible")
+    .addStringOption(option =>
+      option
+        .setName("item")
+        .setDescription("Choose a collectible")
+        .setRequired(true)
+        .addChoices(
+          { name: "Golden Crown", value: "crown" },
+          { name: "Royal Diamond", value: "diamond" },
+          { name: "Mystic Crystal", value: "crystal" },
+          { name: "Champion Trophy", value: "trophy" },
+          { name: "Golden Dragon", value: "dragon" }
+        )
+    )
+);
+
+gcubeCommand.addSubcommand(sub =>
+  sub
+    .setName("equip")
+    .setDescription("Equip an owned collectible")
+    .addStringOption(option =>
+      option
+        .setName("item")
+        .setDescription("Choose the item to equip")
+        .setRequired(true)
+        .addChoices(
+          { name: "Golden Crown", value: "crown" },
+          { name: "Royal Diamond", value: "diamond" },
+          { name: "Mystic Crystal", value: "crystal" },
+          { name: "Champion Trophy", value: "trophy" },
+          { name: "Golden Dragon", value: "dragon" }
+        )
+    )
+);
+
+// ------------------------------------------------------------
+// VISUAL SHOP
+// Each item gets its own image embed.
+// ------------------------------------------------------------
+
+async function gcubeV3Shop(interaction) {
+  const { EmbedBuilder } = require("discord.js");
+
+  const embeds = [];
+
+  for (const key of GCUBE_V3_ITEMS) {
+    const item = GCUBE_VISUAL_CATALOG[key];
+
+    if (!item) continue;
+
+    const embed = new EmbedBuilder()
+      .setColor(0xD4AF37)
+      .setTitle(`💎 ${item.name}`)
+      .setDescription(
+        `${item.description || "Exclusive GCube collectible."}\n\n` +
+        `**Rarity:** ${item.rarity}\n` +
+        `**Price:** ${Number(item.price).toLocaleString("en-IN")} GC\n\n` +
+        `Purchase with \`/gcube buy item:${key}\``
+      )
+      .setFooter({
+        text: "ELYX TRADING • GCUBE PARTY SHOP"
+      });
+
+    if (item.image) {
+      embed.setImage(item.image);
+    }
+
+    embeds.push(embed);
+  }
+
+  if (!embeds.length) {
+    return interaction.reply({
+      content: "❌ Shop items are not configured.",
+      ephemeral: true
+    });
+  }
+
+  return interaction.reply({
+    content: "✨ **GCUBE PREMIUM COLLECTIBLE SHOP**",
+    embeds: embeds.slice(0, 10),
+    ephemeral: true
+  });
+}
+
+// ------------------------------------------------------------
+// BUY ITEM
+// Deducts GC and adds the item to visual inventory.
+// ------------------------------------------------------------
+
+async function gcubeV3Buy(interaction) {
+  const key = interaction.options.getString("item");
+  const item = GCUBE_VISUAL_CATALOG[key];
+
+  if (!item || !GCUBE_V3_ITEMS.includes(key)) {
+    return interaction.reply({
+      content: "❌ Ye item shop mein available nahi hai.",
+      ephemeral: true
+    });
+  }
+
+  const price = Number(item.price);
+
+  if (!Number.isSafeInteger(price) || price <= 0) {
+    return interaction.reply({
+      content: "❌ Is item ki price configuration galat hai.",
+      ephemeral: true
+    });
+  }
+
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+
+  if (Number(user.balance) < price) {
+    return interaction.reply({
+      content:
+        `❌ Not enough GC!\n` +
+        `💰 Your balance: **${formatGC(user.balance)} GC**\n` +
+        `🏷️ Item price: **${formatGC(price)} GC**`,
+      ephemeral: true
+    });
+  }
+
+  try {
+    // Deduct the purchase price.
+    const success = spendGC(data, user, price);
+
+    if (!success) {
+      return interaction.reply({
+        content: "❌ Purchase failed. Check your GC balance.",
+        ephemeral: true
+      });
+    }
+
+    // Save economy before granting the collectible.
+    saveGCubeData(data);
+
+    // Grant the collectible through the existing visual system.
+    gcubeVisualAddItem(interaction.user.id, key, 1);
+
+    const { EmbedBuilder } = require("discord.js");
+
+    const embed = new EmbedBuilder()
+      .setColor(0x57F287)
+      .setTitle("🎉 COLLECTIBLE PURCHASED!")
+      .setDescription(
+        `You purchased **${item.name}**!\n\n` +
+        `**Rarity:** ${item.rarity}\n` +
+        `**Price paid:** ${formatGC(price)} GC\n` +
+        `**Remaining balance:** ${formatGC(user.balance)} GC\n\n` +
+        `Equip it with \`/gcube equip item:${key}\``
+      )
+      .setThumbnail(item.image || interaction.user.displayAvatarURL())
+      .setFooter({
+        text: "ELYX TRADING • GCUBE PARTY"
+      })
+      .setTimestamp();
+
+    return interaction.reply({
+      embeds: [embed],
+      ephemeral: true
+    });
+  } catch (error) {
+    console.error("[GCube V3] Purchase error:", error);
+
+    return interaction.reply({
+      content:
+        "❌ Purchase mein error aaya. Admin ko logs check karne bolo.",
+      ephemeral: true
+    }).catch(() => {});
+  }
+}
+
+// ------------------------------------------------------------
+// EQUIP ITEM
+// ------------------------------------------------------------
+
+async function gcubeV3Equip(interaction) {
+  const key = interaction.options.getString("item");
+  const item = GCUBE_VISUAL_CATALOG[key];
+
+  if (!item || !GCUBE_V3_ITEMS.includes(key)) {
+    return interaction.reply({
+      content: "❌ Invalid collectible.",
+      ephemeral: true
+    });
+  }
+
+  try {
+    const result = gcubeVisualEquipItem(
+      interaction.user.id,
+      key
+    );
+
+    if (result === false) {
+      return interaction.reply({
+        content:
+          "❌ Ye item tumhare inventory mein nahi hai. " +
+          "Pehle `/gcube buy` se purchase karo.",
+        ephemeral: true
+      });
+    }
+
+    const { EmbedBuilder } = require("discord.js");
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865F2)
+      .setTitle("✨ ITEM EQUIPPED")
+      .setDescription(
+        `**${item.name}** has been equipped!\n\n` +
+        `Rarity: **${item.rarity}**`
+      )
+      .setThumbnail(item.image || interaction.user.displayAvatarURL())
+      .setFooter({
+        text: "ELYX TRADING • GCUBE PARTY"
+      });
+
+    return interaction.reply({
+      embeds: [embed],
+      ephemeral: true
+    });
+  } catch (error) {
+    console.error("[GCube V3] Equip error:", error);
+
+    return interaction.reply({
+      content: "❌ Item equip nahi ho saka.",
+      ephemeral: true
+    }).catch(() => {});
+  }
+}
+
+// ------------------------------------------------------------
+// VISUAL COLLECTION
+// ------------------------------------------------------------
+
+async function gcubeV3Collection(interaction) {
+  try {
+    const embed = gcubeVisualGetInventoryEmbed(
+      interaction.user.id,
+      interaction.user.username
+    );
+
+    if (!embed) {
+      return interaction.reply({
+        content: "🎒 Your collection is empty.",
+        ephemeral: true
+      });
+    }
+
+    return interaction.reply({
+      embeds: [embed],
+      ephemeral: true
+    });
+  } catch (error) {
+    console.error("[GCube V3] Collection error:", error);
+
+    return interaction.reply({
+      content: "❌ Collection load nahi ho saki.",
+      ephemeral: true
+    }).catch(() => {});
+  }
+}
+
+// ------------------------------------------------------------
+// CONNECT HANDLERS TO EXISTING /gcube SYSTEM
+// .set replaces old handlers without duplicate-handler errors.
+// ------------------------------------------------------------
+
+gcubeSubcommandHandlers.set("shop", gcubeV3Shop);
+gcubeSubcommandHandlers.set("buy", gcubeV3Buy);
+gcubeSubcommandHandlers.set("equip", gcubeV3Equip);
+gcubeSubcommandHandlers.set("collection", gcubeV3Collection);
+
+console.log(
+  "✅ GCube Visual Upgrade Part 3 loaded."
+);

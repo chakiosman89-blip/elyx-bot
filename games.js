@@ -2005,3 +2005,418 @@ module.exports.GCUBE_INVITE_MILESTONE_REWARDS =
   GCUBE_INVITE_MILESTONE_REWARDS;
 
 console.log("✅ GCube activity reward settings loaded.");
+
+// ============================================================
+// GCUBE PARTY VISUAL UPGRADE — PART 1
+// Collection artwork, wealth ranks, showcase and item catalog
+// Paste at the VERY END of games.js
+// ============================================================
+
+const GCUBE_VISUAL_CATALOG = {
+  crown: {
+    name: "Golden Crown",
+    rarity: "Legendary",
+    price: 25000,
+    image: "https://cdn-icons-png.flaticon.com/512/616/616490.png",
+    description: "A royal crown for elite collectors."
+  },
+
+  diamond: {
+    name: "Royal Diamond",
+    rarity: "Epic",
+    price: 12000,
+    image: "https://cdn-icons-png.flaticon.com/512/616/616554.png",
+    description: "A shining collectible diamond."
+  },
+
+  crystal: {
+    name: "Mystic Crystal",
+    rarity: "Mythic",
+    price: 50000,
+    image: "https://cdn-icons-png.flaticon.com/512/1046/1046784.png",
+    description: "A mysterious crystal for collectors."
+  },
+
+  trophy: {
+    name: "Champion Trophy",
+    rarity: "Rare",
+    price: 5000,
+    image: "https://cdn-icons-png.flaticon.com/512/3112/3112946.png",
+    description: "A trophy for dedicated players."
+  },
+
+  dragon: {
+    name: "Golden Dragon",
+    rarity: "Secret",
+    price: 100000,
+    image: "https://cdn-icons-png.flaticon.com/512/616/616408.png",
+    description: "An exclusive high-value collectible."
+  }
+};
+
+const GCUBE_VISUAL_WEALTH_RANKS = [
+  { min: 1, name: "GCube Emperor", logo: "👑", color: 0xFFD700 },
+  { min: 2, name: "Diamond Elite", logo: "💎", color: 0x00BFFF },
+  { min: 4, name: "GCube Royal", logo: "🏆", color: 0x9B59B6 },
+  { min: 11, name: "Wealth Legend", logo: "✨", color: 0x2ECC71 },
+  { min: 26, name: "GCube Member", logo: "💠", color: 0x3498DB }
+];
+
+function gcubeVisualGetWealthRank(position) {
+  return GCUBE_VISUAL_WEALTH_RANKS.find(
+    rank => position >= rank.min &&
+      position < (
+        GCUBE_VISUAL_WEALTH_RANKS[
+          GCUBE_VISUAL_WEALTH_RANKS.indexOf(rank) + 1
+        ]?.min ?? Infinity
+      )
+  ) || GCUBE_VISUAL_WEALTH_RANKS[
+    GCUBE_VISUAL_WEALTH_RANKS.length - 1
+  ];
+}
+
+function gcubeVisualBuildItemEmbed(itemKey, ownerName = "GCube Collector") {
+  const item = GCUBE_VISUAL_CATALOG[itemKey];
+
+  if (!item) return null;
+
+  const { EmbedBuilder } = require("discord.js");
+
+  return new EmbedBuilder()
+    .setColor(0xD4AF37)
+    .setTitle(`💎 ${item.name}`)
+    .setDescription(
+      `**Owner:** ${ownerName}\n` +
+      `**Rarity:** ${item.rarity}\n` +
+      `**Collection Value:** ${item.price.toLocaleString("en-IN")} GC\n\n` +
+      item.description
+    )
+    .setThumbnail(item.image)
+    .setFooter({ text: "GCube Party • Collect. Equip. Flex." });
+}
+
+function gcubeVisualBuildShowcase({
+  username = "GCube Collector",
+  wallet = 0,
+  collectionValue = 0,
+  legendaryCount = 0,
+  rarestItem = "None",
+  views = 0,
+  position = 999
+} = {}) {
+  const { EmbedBuilder } = require("discord.js");
+  const rank = gcubeVisualGetWealthRank(position);
+
+  return new EmbedBuilder()
+    .setColor(rank.color)
+    .setTitle(`${rank.logo} ${username}'s GCube Showcase`)
+    .setDescription(
+      `**${rank.logo} Rank:** ${rank.name}\n\n` +
+      `💰 **Wallet:** ${Number(wallet).toLocaleString("en-IN")} GC\n` +
+      `💎 **Collection Value:** ${Number(collectionValue).toLocaleString("en-IN")} GC\n` +
+      `✨ **Legendary Items:** ${Number(legendaryCount)}\n` +
+      `👑 **Rarest Item:** ${rarestItem}\n` +
+      `👁️ **Showcase Views:** ${Number(views)}\n\n` +
+      `*Collect rare items and show off your collection!*`
+    )
+    .setFooter({ text: "GCube Party • Visual Collection System" })
+    .setTimestamp();
+}
+
+// Export helpers for future integration with existing commands.
+module.exports.GCUBE_VISUAL_CATALOG = GCUBE_VISUAL_CATALOG;
+module.exports.GCUBE_VISUAL_WEALTH_RANKS = GCUBE_VISUAL_WEALTH_RANKS;
+module.exports.gcubeVisualGetWealthRank = gcubeVisualGetWealthRank;
+module.exports.gcubeVisualBuildItemEmbed = gcubeVisualBuildItemEmbed;
+module.exports.gcubeVisualBuildShowcase = gcubeVisualBuildShowcase;
+
+console.log("✅ GCube Visual Collection Part 1 loaded.");
+
+// ============================================================
+// GCUBE PARTY VISUAL UPGRADE — PART 2
+// Inventory, equipped items, showcase views and clan data
+// Paste AFTER Part 1 at the end of games.js
+// ============================================================
+
+const GCUBE_VISUAL_DATA_FILE = require("path").join(
+  __dirname,
+  "gcube_visual_data.json"
+);
+
+const fs = require("fs");
+
+let gcubeVisualData = {
+  users: {},
+  clans: {},
+  showcaseViews: {}
+};
+
+try {
+  if (fs.existsSync(GCUBE_VISUAL_DATA_FILE)) {
+    const saved = JSON.parse(
+      fs.readFileSync(GCUBE_VISUAL_DATA_FILE, "utf8")
+    );
+
+    gcubeVisualData = {
+      users: saved.users || {},
+      clans: saved.clans || {},
+      showcaseViews: saved.showcaseViews || {}
+    };
+  }
+} catch (error) {
+  console.error(
+    "[GCube Visual] Could not load visual data:",
+    error.message
+  );
+}
+
+function gcubeVisualSaveData() {
+  try {
+    const temporaryFile = GCUBE_VISUAL_DATA_FILE + ".tmp";
+
+    fs.writeFileSync(
+      temporaryFile,
+      JSON.stringify(gcubeVisualData, null, 2),
+      "utf8"
+    );
+
+    fs.renameSync(temporaryFile, GCUBE_VISUAL_DATA_FILE);
+    return true;
+  } catch (error) {
+    console.error(
+      "[GCube Visual] Could not save visual data:",
+      error.message
+    );
+
+    return false;
+  }
+}
+
+function gcubeVisualGetUser(userId) {
+  if (!gcubeVisualData.users[userId]) {
+    gcubeVisualData.users[userId] = {
+      inventory: {},
+      equipped: null,
+      title: "GCube Collector"
+    };
+  }
+
+  const user = gcubeVisualData.users[userId];
+
+  if (!user.inventory || typeof user.inventory !== "object") {
+    user.inventory = {};
+  }
+
+  return user;
+}
+
+function gcubeVisualAddItem(userId, itemKey, amount = 1) {
+  const item = GCUBE_VISUAL_CATALOG[itemKey];
+
+  if (!item) {
+    return { ok: false, message: "Unknown collectible." };
+  }
+
+  if (!Number.isInteger(amount) || amount < 1 || amount > 100) {
+    return { ok: false, message: "Invalid item amount." };
+  }
+
+  const user = gcubeVisualGetUser(userId);
+
+  user.inventory[itemKey] =
+    (Number(user.inventory[itemKey]) || 0) + amount;
+
+  if (!gcubeVisualSaveData()) {
+    user.inventory[itemKey] -= amount;
+
+    if (user.inventory[itemKey] <= 0) {
+      delete user.inventory[itemKey];
+    }
+
+    return {
+      ok: false,
+      message: "Could not save inventory. Please try again."
+    };
+  }
+
+  return {
+    ok: true,
+    message: `Added ${amount}x ${item.name} to inventory.`
+  };
+}
+
+function gcubeVisualEquipItem(userId, itemKey) {
+  const item = GCUBE_VISUAL_CATALOG[itemKey];
+
+  if (!item) {
+    return { ok: false, message: "Unknown collectible." };
+  }
+
+  const user = gcubeVisualGetUser(userId);
+
+  if ((Number(user.inventory[itemKey]) || 0) < 1) {
+    return {
+      ok: false,
+      message: "You do not own this item yet."
+    };
+  }
+
+  const previous = user.equipped;
+  user.equipped = itemKey;
+
+  if (!gcubeVisualSaveData()) {
+    user.equipped = previous;
+
+    return {
+      ok: false,
+      message: "Could not save equipped item."
+    };
+  }
+
+  return {
+    ok: true,
+    message: `Equipped ${item.name}.`
+  };
+}
+
+function gcubeVisualGetInventoryEmbed(userId, username = "Collector") {
+  const { EmbedBuilder } = require("discord.js");
+  const user = gcubeVisualGetUser(userId);
+
+  const entries = Object.entries(user.inventory)
+    .filter(([key, amount]) =>
+      GCUBE_VISUAL_CATALOG[key] && Number(amount) > 0
+    );
+
+  const description = entries.length
+    ? entries.map(([key, amount]) => {
+        const item = GCUBE_VISUAL_CATALOG[key];
+
+        return `**${item.name}** ×${amount}\n` +
+          `Rarity: ${item.rarity} • Value: ${item.price.toLocaleString("en-IN")} GC`;
+      }).join("\n\n")
+    : "Your collection is empty. Visit the GCube shop to get started!";
+
+  const embed = new EmbedBuilder()
+    .setColor(0x3498DB)
+    .setTitle(`💎 ${username}'s Collection`)
+    .setDescription(description)
+    .setFooter({ text: "GCube Party • Your collectibles" });
+
+  if (user.equipped && GCUBE_VISUAL_CATALOG[user.equipped]) {
+    const item = GCUBE_VISUAL_CATALOG[user.equipped];
+
+    embed.addFields({
+      name: "✨ Equipped Item",
+      value: item.name,
+      inline: true
+    });
+
+    embed.setThumbnail(item.image);
+  }
+
+  return embed;
+}
+
+function gcubeVisualRecordShowcaseView(ownerId, viewerId) {
+  if (ownerId === viewerId) {
+    return { ok: true, counted: false, views: 0 };
+  }
+
+  if (!gcubeVisualData.showcaseViews[ownerId]) {
+    gcubeVisualData.showcaseViews[ownerId] = [];
+  }
+
+  const viewers = gcubeVisualData.showcaseViews[ownerId];
+
+  // Count each viewer once to prevent repeated-click farming.
+  if (viewers.includes(viewerId)) {
+    return {
+      ok: true,
+      counted: false,
+      views: viewers.length
+    };
+  }
+
+  viewers.push(viewerId);
+
+  if (!gcubeVisualSaveData()) {
+    viewers.pop();
+
+    return {
+      ok: false,
+      counted: false,
+      views: viewers.length
+    };
+  }
+
+  return {
+    ok: true,
+    counted: true,
+    views: viewers.length
+  };
+}
+
+function gcubeVisualCreateClan(clanId, name, ownerId, logoUrl = null) {
+  if (gcubeVisualData.clans[clanId]) {
+    return { ok: false, message: "That clan already exists." };
+  }
+
+  if (
+    typeof name !== "string" ||
+    name.trim().length < 2 ||
+    name.trim().length > 32
+  ) {
+    return {
+      ok: false,
+      message: "Clan name must be 2–32 characters."
+    };
+  }
+
+  if (
+    logoUrl &&
+    (
+      typeof logoUrl !== "string" ||
+      !/^https:\/\/\S+$/i.test(logoUrl)
+    )
+  ) {
+    return {
+      ok: false,
+      message: "Clan logo must be an HTTPS image URL."
+    };
+  }
+
+  gcubeVisualData.clans[clanId] = {
+    name: name.trim(),
+    ownerId,
+    logoUrl,
+    members: [ownerId],
+    points: 0,
+    createdAt: new Date().toISOString()
+  };
+
+  if (!gcubeVisualSaveData()) {
+    delete gcubeVisualData.clans[clanId];
+
+    return {
+      ok: false,
+      message: "Could not save clan data."
+    };
+  }
+
+  return {
+    ok: true,
+    message: `Clan "${name.trim()}" created.`
+  };
+}
+
+// Export helpers for integration with existing slash commands.
+module.exports.gcubeVisualSaveData = gcubeVisualSaveData;
+module.exports.gcubeVisualGetUser = gcubeVisualGetUser;
+module.exports.gcubeVisualAddItem = gcubeVisualAddItem;
+module.exports.gcubeVisualEquipItem = gcubeVisualEquipItem;
+module.exports.gcubeVisualGetInventoryEmbed = gcubeVisualGetInventoryEmbed;
+module.exports.gcubeVisualRecordShowcaseView = gcubeVisualRecordShowcaseView;
+module.exports.gcubeVisualCreateClan = gcubeVisualCreateClan;
+
+console.log("✅ GCube Visual Collection Part 2 loaded.");

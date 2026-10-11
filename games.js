@@ -2143,7 +2143,7 @@ const GCUBE_VISUAL_DATA_FILE = require("path").join(
   "gcube_visual_data.json"
 );
 
-const fs = require("fs");
+
 
 let gcubeVisualData = {
   users: {},

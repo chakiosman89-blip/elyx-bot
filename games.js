@@ -1898,3 +1898,55 @@ module.exports.cacheGuildInvites = cacheGuildInvites;
 module.exports.handleGCubeMemberJoin = handleGCubeMemberJoin;
 
 console.log("[GCube] Invite tracking exports registered.");
+// ============================================
+// GCUBE PARTY — PUBLIC SLASH COMMAND REPLIES
+// ============================================
+
+const originalGCubeRootHandler = module.exports.handleGCubeRoot;
+
+function gcubeMakePublic(options) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    return options;
+  }
+
+  const updated = { ...options };
+
+  // Remove private reply setting
+  delete updated.ephemeral;
+
+  // Remove Discord's Ephemeral flag (64)
+  if (typeof updated.flags === "number") {
+    updated.flags = updated.flags & ~64;
+  } else if (Array.isArray(updated.flags)) {
+    updated.flags = updated.flags.filter(
+      flag => flag !== "Ephemeral" && flag !== 64
+    );
+  }
+
+  return updated;
+}
+
+function gcubePublicInteraction(interaction) {
+  for (const method of ["reply", "deferReply", "followUp"]) {
+    const original = interaction[method];
+
+    if (typeof original !== "function") continue;
+
+    interaction[method] = function (options, ...args) {
+      return original.call(
+        this,
+        gcubeMakePublic(options),
+        ...args
+      );
+    };
+  }
+}
+
+if (typeof originalGCubeRootHandler === "function") {
+  module.exports.handleGCubeRoot = async function (interaction) {
+    gcubePublicInteraction(interaction);
+    return originalGCubeRootHandler(interaction);
+  };
+
+  console.log("✅ GCube public reply patch loaded.");
+        }

@@ -191,62 +191,18 @@ addCommand(
 );
 
 // ============================================
-// GCUBE COMMAND REGISTRATION
+// GCUBE PARTY — UNIFIED COMMAND REGISTRATION
 // ============================================
 
-const gcubeCommandNames = [
-  "gcubeHelpCommand",
-  "gcubeBalanceCommand",
-  "gcubeRewardsCommand",
-  "gcubeInviteRewardsCommand",
-  "gcubeInviteClaimCommand",
-  "gcubeQuestsCommand",
-  "gcubeQuestClaimCommand",
-  "gcubeShopCommand",
-  "gcubeBuyCommand",
-  "gcubeCollectionCommand",
-  "gcubeProfileCommand",
-  "gcubeShowcaseCommand",
-  "gcubeTopCommand",
-  "gcubeUpgradeCommand",
-  "gcubePayCommand",
-  "gcubeSellCommand",
-  "gcubeHistoryCommand"
-];
-
-for (const name of gcubeCommandNames) {
-  const command = gcube[name];
-
-  if (command && typeof command.toJSON === "function") {
-    addCommand(command);
-    console.log(`✅ Loaded /${command.name}`);
-  } else {
-    console.warn(`⚠️ GCube command missing or not exported: ${name}`);
-  }
-}
-
-// ============================================
-// GCUBE STANDALONE HANDLERS
-// ============================================
-
-const gcubeHandlers = {
-  "gcube-help": "handleGCubeHelp",
-  "gcube-rewards": "handleGCubeRewards",
-  "gcube-invites": "handleGCubeInvites",
-  "gcube-invite-claim": "handleGCubeInviteClaim",
-  "gcube-quests": "handleGCubeQuests",
-  "gcube-quest-claim": "handleGCubeQuestClaim",
-  "gcube-shop": "handleGCubeShop",
-  "gcube-buy": "handleGCubeBuy",
-  "gcube-collection": "handleGCubeCollection",
-  "gcube-profile": "handleGCubeProfile",
-  "gcube-showcase": "handleGCubeShowcase",
-  "gcube-top": "handleGCubeTop",
-  "gcube-upgrade": "handleGCubeUpgrade",
-  "gcube-pay": "handleGCubePay",
-  "gcube-sell": "handleGCubeSell",
-  "gcube-history": "handleGCubeHistory"
-};
+if (
+  gcube.gcubeCommand &&
+  typeof gcube.gcubeCommand.toJSON === "function"
+) {
+  addCommand(gcube.gcubeCommand);
+  console.log("✅ Loaded unified /gcube command.");
+} else {
+  console.error("❌ Unified /gcube command is missing.");
+} 
 
 // ============================================
 // INTERACTION HANDLER
@@ -258,7 +214,7 @@ client.on(Events.InteractionCreate, async interaction => {
   const commandName = interaction.commandName;
 
   try {
-    // AI commands
+    // AI COMMANDS
     if (["ai", "ask", "memory", "aistatus"].includes(commandName)) {
       if (typeof ai.handleCommand !== "function") {
         await interaction.reply({
@@ -277,54 +233,20 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // GCube root command
+    // ALL GCUBE SUBCOMMANDS
     if (commandName === "gcube") {
-      const subcommand = interaction.options.getSubcommand();
-
-      const rootHandlers = {
-        balance: "handleGCubeBalance",
-        rewards: "handleGCubeRewards",
-        invites: "handleGCubeInvites",
-        quests: "handleGCubeQuests",
-        shop: "handleGCubeShop",
-        collection: "handleGCubeCollection",
-        profile: "handleGCubeProfile",
-        top: "handleGCubeTop",
-        showcase: "handleGCubeShowcase",
-        history: "handleGCubeHistory"
-      };
-
-      const handlerName = rootHandlers[subcommand];
-      const handler = handlerName ? gcube[handlerName] : null;
-
-      if (typeof handler !== "function") {
+      if (typeof gcube.handleGCubeRoot !== "function") {
         await interaction.reply({
-          content: "⚠️ This GCube subcommand is missing or not exported.",
+          content: "❌ GCube system is not loaded.",
           ephemeral: true
         });
         return;
       }
 
-      await handler(interaction);
+      await gcube.handleGCubeRoot(interaction);
       return;
     }
 
-    // Standalone GCube commands
-    const handlerName = gcubeHandlers[commandName];
-
-    if (handlerName) {
-      const handler = gcube[handlerName];
-
-      if (typeof handler !== "function") {
-        await interaction.reply({
-          content: "⚠️ This GCube command handler is not available yet.",
-          ephemeral: true
-        });
-        return;
-      }
-
-      await handler(interaction);
-    }
   } catch (error) {
     console.error(`❌ Command /${commandName} failed:`, error);
 

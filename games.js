@@ -2464,24 +2464,7 @@ if (
 // Existing /gcube shop and /gcube collection are reused.
 // ------------------------------------------------------------
 
-gcubeCommand.addSubcommand(sub =>
-  sub
-    .setName("buy")
-    .setDescription("Purchase a GCube collectible")
-    .addStringOption(option =>
-      option
-        .setName("item")
-        .setDescription("Choose a collectible")
-        .setRequired(true)
-        .addChoices(
-          { name: "Golden Crown", value: "crown" },
-          { name: "Royal Diamond", value: "diamond" },
-          { name: "Mystic Crystal", value: "crystal" },
-          { name: "Champion Trophy", value: "trophy" },
-          { name: "Golden Dragon", value: "dragon" }
-        )
-    )
-);
+
 
 
 

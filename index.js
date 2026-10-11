@@ -48,8 +48,7 @@ const client = new Client({
 });
 
 // ============================================
-// DATA STORAGE
-// Preserve AI and GCube data
+// AI DATA STORAGE
 // ============================================
 
 const DATA_FILE = path.join(__dirname, "data.json");
@@ -83,8 +82,6 @@ const data = loadData();
 function saveData() {
   try {
     const tempFile = `${DATA_FILE}.tmp`;
-
-    // Read the latest saved file first
     let existingData = {};
 
     if (fs.existsSync(DATA_FILE)) {
@@ -93,13 +90,12 @@ function saveData() {
       );
     }
 
-    // Merge AI data without deleting other saved data
     const safeData = {
       ...existingData,
       ...data
     };
 
-    // Keep the latest GCube data saved by games.js
+    // Preserve GCube data stored by games.js
     if (existingData.gcubeParty) {
       safeData.gcubeParty = existingData.gcubeParty;
     }
@@ -111,12 +107,8 @@ function saveData() {
     );
 
     fs.renameSync(tempFile, DATA_FILE);
-
   } catch (error) {
-    console.error(
-      "❌ Could not save data.json:",
-      error.message
-    );
+    console.error("❌ Could not save data.json:", error.message);
   }
 }
 
@@ -180,13 +172,13 @@ addCommand(
   new SlashCommandBuilder()
     .setName("memory")
     .setDescription("Manage your Elyx AI memory")
-    .addSubcommand(subcommand =>
-      subcommand
+    .addSubcommand(sub =>
+      sub
         .setName("view")
         .setDescription("View your saved AI memories")
     )
-    .addSubcommand(subcommand =>
-      subcommand
+    .addSubcommand(sub =>
+      sub
         .setName("clear")
         .setDescription("Delete your saved AI memories")
     )
@@ -229,14 +221,12 @@ for (const name of gcubeCommandNames) {
     addCommand(command);
     console.log(`✅ Loaded /${command.name}`);
   } else {
-    console.warn(
-      `⚠️ GCube command missing or not exported: ${name}`
-    );
+    console.warn(`⚠️ GCube command missing or not exported: ${name}`);
   }
 }
 
 // ============================================
-// GCUBE STANDALONE COMMAND HANDLERS
+// GCUBE STANDALONE HANDLERS
 // ============================================
 
 const gcubeHandlers = {
@@ -260,7 +250,6 @@ const gcubeHandlers = {
 
 // ============================================
 // INTERACTION HANDLER
-// AI + GCUBE SLASH COMMANDS
 // ============================================
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -269,13 +258,8 @@ client.on(Events.InteractionCreate, async interaction => {
   const commandName = interaction.commandName;
 
   try {
-    // ----------------------------------------
-    // AI COMMANDS
-    // ----------------------------------------
-
-    if (
-      ["ai", "ask", "memory", "aistatus"].includes(commandName)
-    ) {
+    // AI commands
+    if (["ai", "ask", "memory", "aistatus"].includes(commandName)) {
       if (typeof ai.handleCommand !== "function") {
         await interaction.reply({
           content: "⚠️ AI module is not ready.",
@@ -293,11 +277,7 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // ----------------------------------------
-    // GCUBE ROOT COMMAND
-    // /gcube balance, rewards, invites, etc.
-    // ----------------------------------------
-
+    // GCube root command
     if (commandName === "gcube") {
       const subcommand = interaction.options.getSubcommand();
 
@@ -319,8 +299,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (typeof handler !== "function") {
         await interaction.reply({
-          content:
-            "⚠️ This GCube subcommand is missing or not exported.",
+          content: "⚠️ This GCube subcommand is missing or not exported.",
           ephemeral: true
         });
         return;
@@ -330,10 +309,7 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // ----------------------------------------
-    // GCUBE STANDALONE COMMANDS
-    // ----------------------------------------
-
+    // Standalone GCube commands
     const handlerName = gcubeHandlers[commandName];
 
     if (handlerName) {
@@ -341,22 +317,16 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (typeof handler !== "function") {
         await interaction.reply({
-          content:
-            "⚠️ This GCube command handler is not available yet.",
+          content: "⚠️ This GCube command handler is not available yet.",
           ephemeral: true
         });
         return;
       }
 
       await handler(interaction);
-      return;
     }
-
   } catch (error) {
-    console.error(
-      `❌ Command /${commandName} failed:`,
-      error
-    );
+    console.error(`❌ Command /${commandName} failed:`, error);
 
     const reply = {
       content: "❌ Command error. Please try again.",
@@ -373,26 +343,20 @@ client.on(Events.InteractionCreate, async interaction => {
 
 // ============================================
 // AI NORMAL CHAT
-// Reply when mentioned or when replied to
 // ============================================
 
 client.on(Events.MessageCreate, async message => {
   try {
-    if (message.author.bot) return;
-    if (!client.user) return;
+    if (message.author.bot || !client.user) return;
 
     const mentioned = message.mentions.has(client.user.id);
-
     let repliedToBot = false;
 
     if (message.reference?.messageId) {
       const repliedMessage = await message.fetchReference()
         .catch(() => null);
 
-      if (
-        repliedMessage &&
-        repliedMessage.author.id === client.user.id
-      ) {
+      if (repliedMessage?.author.id === client.user.id) {
         repliedToBot = true;
       }
     }
@@ -400,17 +364,12 @@ client.on(Events.MessageCreate, async message => {
     if (!mentioned && !repliedToBot) return;
 
     if (!data.aiEnabled) {
-      await message.reply(
-        "⚠️ Elyx AI is currently disabled."
-      );
+      await message.reply("⚠️ Elyx AI is currently disabled.");
       return;
     }
 
     const cleanMessage = message.content
-      .replace(
-        new RegExp(`<@!?${client.user.id}>`, "g"),
-        ""
-      )
+      .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
       .trim();
 
     if (!cleanMessage) {
@@ -432,10 +391,8 @@ client.on(Events.MessageCreate, async message => {
     });
 
     await message.reply(
-      String(reply || "Bhai, abhi reply nahi bana.")
-        .slice(0, 1900)
+      String(reply || "Bhai, abhi reply nahi bana.").slice(0, 1900)
     );
-
   } catch (error) {
     console.error("❌ AI chat error:", error.message);
 
@@ -451,18 +408,12 @@ client.on(Events.MessageCreate, async message => {
 
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot || !message.guild) return;
-
-  if (typeof gcube.handleGCubeMessage !== "function") {
-    return;
-  }
+  if (typeof gcube.handleGCubeMessage !== "function") return;
 
   try {
     await gcube.handleGCubeMessage(message);
   } catch (error) {
-    console.error(
-      "❌ GCube message counter error:",
-      error.message
-    );
+    console.error("❌ GCube message counter error:", error.message);
   }
 });
 
@@ -488,7 +439,6 @@ client.on(Events.InteractionCreate, async interaction => {
     ) {
       await gcube.handleGCubeQuestButton(interaction);
     }
-
   } catch (error) {
     console.error("❌ GCube button error:", error);
 
@@ -507,15 +457,15 @@ client.on(Events.InteractionCreate, async interaction => {
 
 client.once(Events.ClientReady, async () => {
   for (const guild of client.guilds.cache.values()) {
-    if (typeof gcube.cacheGuildInvites === "function") {
-      try {
-        await gcube.cacheGuildInvites(guild);
-      } catch (error) {
-        console.error(
-          `❌ Could not cache invites for ${guild.name}:`,
-          error.message
-        );
-      }
+    if (typeof gcube.cacheGuildInvites !== "function") continue;
+
+    try {
+      await gcube.cacheGuildInvites(guild);
+    } catch (error) {
+      console.error(
+        `❌ Could not cache invites for ${guild.name}:`,
+        error.message
+      );
     }
   }
 });
@@ -526,14 +476,12 @@ client.on(Events.GuildMemberAdd, async member => {
   try {
     await gcube.handleGCubeMemberJoin(client, member);
   } catch (error) {
-    console.error(
-      "❌ GCube invite tracking error:",
-      error.message
-    );
+    console.error("❌ GCube invite tracking error:", error.message);
   }
 });
+
 // ============================================
-// REGISTER ONLY AI + GCUBE COMMANDS
+// SINGLE SLASH COMMAND REGISTRATION
 // ============================================
 
 client.once(Events.ClientReady, async () => {
@@ -548,67 +496,19 @@ client.once(Events.ClientReady, async () => {
 
     console.log(`📋 Preparing ${commandList.length} commands...`);
 
-    // Safety check: Discord allows at most 100 commands
-    // in each application command scope.
     if (commandList.length > 100) {
       throw new Error(
         `Too many commands: ${commandList.length}. Maximum is 100.`
       );
     }
 
-    // If GUILD_ID is set, register commands for this server
-    // and clear old global commands.
     if (process.env.GUILD_ID) {
+      // Clear old global commands, then register server commands.
       await rest.put(
         Routes.applicationCommands(client.user.id),
         { body: [] }
       );
 
-      await rest.put(
-        Routes.applicationGuildCommands(
-          client.user.id,
-          process.env.GUILD_ID
-        ),
-        { body: commandList }
-      );
-
-      console.log("✅ Old global commands cleared.");
-      console.log("✅ AI + GCube server commands registered.");
-    } else {
-      // Replace all global commands with this code's command list.
-      await rest.put(
-        Routes.applicationCommands(client.user.id),
-        { body: commandList }
-      );
-
-      console.log("✅ Global commands replaced.");
-      console.log(
-        "ℹ️ Global commands may take some time to update."
-      );
-    }
-
-    console.log(`✅ Registered ${commandList.length} commands.`);
-
-  } catch (error) {
-    console.error(
-      "❌ Slash command registration failed:",
-      error.message
-    );
-  }
-});
-
-
-client.once(Events.ClientReady, async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-
-  try {
-    const rest = new REST({ version: "10" })
-      .setToken(process.env.DISCORD_TOKEN);
-
-    const commandList = [...commands.values()]
-      .map(command => command.toJSON());
-
-    if (process.env.GUILD_ID) {
       await rest.put(
         Routes.applicationGuildCommands(
           client.user.id,
@@ -624,13 +524,11 @@ client.once(Events.ClientReady, async () => {
         { body: commandList }
       );
 
-      console.log(
-        "✅ Global commands registered. They may take time to appear."
-      );
+      console.log("✅ Global slash commands registered.");
+      console.log("ℹ️ Global commands may take time to appear.");
     }
 
-    console.log(`📋 Registered ${commandList.length} commands.`);
-
+    console.log(`✅ Registered ${commandList.length} commands.`);
   } catch (error) {
     console.error(
       "❌ Slash command registration failed:",

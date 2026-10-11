@@ -1,1031 +1,1021 @@
-const fs = require("fs");
-const path = require("path");
+// ==================================================
+// ELYX TRADING — GCUBE PARTY
+// PART 1: CORE SYSTEM + BALANCE
+// ==================================================
+
 const {
   SlashCommandBuilder,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
+  EmbedBuilder
 } = require("discord.js");
 
-const DATA_FILE = path.join(__dirname, "data.json");
-const INDIA_TZ = "Asia/Kolkata";
+const fs = require("fs");
+const path = require("path");
 
-const DAILY_MESSAGE_REWARDS = [
-  { messages: 10, reward: 5 },
-  { messages: 100, reward: 10 },
-  { messages: 1000, reward: 50 }
-];
+// ==================================================
+// DATA STORAGE
+// ==================================================
 
-const INVITE_REWARDS = [
-  { invites: 5, reward: 5 },
-  { invites: 10, reward: 10 },
-  { invites: 25, reward: 30 },
-  { invites: 50, reward: 75 },
-  { invites: 100, reward: 200 }
-];
+const GCUBE_DATA_FILE = path.join(__dirname, "data.json");
 
-const SHOP_ITEMS = [
-  { id: "shadow_wolf", name: "Shadow Wolf", price: 100, rarity: "Common", type: "collectible", emoji: "🐺" },
-  { id: "flame_dragon", name: "Flame Dragon", price: 300, rarity: "Rare", type: "collectible", emoji: "🐉" },
-  { id: "dark_warrior", name: "Dark Warrior", price: 500, rarity: "Rare", type: "collectible", emoji: "⚔️" },
-  { id: "royal_king", name: "Royal King", price: 750, rarity: "Epic", type: "collectible", emoji: "👑" },
-  { id: "cosmic_phantom", name: "Cosmic Phantom", price: 1500, rarity: "Legendary", type: "collectible", emoji: "👻" },
-  { id: "golden_elyx", name: "Golden Elyx", price: 3000, rarity: "Mythic", type: "collectible", emoji: "🌟" },
-  { id: "diamond_frame", name: "Diamond Frame", price: 250, rarity: "Rare", type: "frame", emoji: "💎" },
-  { id: "golden_frame", name: "Golden Profile Frame", price: 500, rarity: "Epic", type: "frame", emoji: "✨" },
-  { id: "profile_background", name: "Profile Background", price: 200, rarity: "Common", type: "background", emoji: "🎨" },
-  { id: "custom_nameplate", name: "Custom Nameplate", price: 400, rarity: "Epic", type: "nameplate", emoji: "🏷️" },
-  { id: "upgrade_stone", name: "Upgrade Stone", price: 100, rarity: "Material", type: "material", emoji: "🔨" },
-  { id: "diamond_core", name: "Diamond Core", price: 500, rarity: "Material", type: "material", emoji: "💠" },
-  { id: "flame_essence", name: "Flame Essence", price: 750, rarity: "Material", type: "material", emoji: "🔥" },
-  { id: "cosmic_crystal", name: "Cosmic Crystal", price: 1500, rarity: "Material", type: "material", emoji: "🌌" },
-  { id: "elyx_core", name: "Elyx Core", price: 3000, rarity: "Mythic Material", type: "material", emoji: "👑" }
-];
-
-function todayIndia() {
-  const parts = new Intl.DateTimeFormat("en", {
-    timeZone: INDIA_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-
-  const values = {};
-  for (const part of parts) {
-    if (part.type !== "literal") values[part.type] = part.value;
-  }
-
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function loadData() {
+function loadGCubeData() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-
-    if (!parsed.gcubeParty) {
-      parsed.gcubeParty = {
-        users: {},
-        trades: {},
-        inviteTracking: {},
-        history: []
+    if (!fs.existsSync(GCUBE_DATA_FILE)) {
+      return {
+        gcubeParty: {
+          users: {},
+          history: [],
+          invites: {},
+          settings: {}
+        }
       };
     }
 
-    return parsed;
+    const raw = fs.readFileSync(GCUBE_DATA_FILE, "utf8");
+    const data = JSON.parse(raw);
+
+    if (!data.gcubeParty) {
+      data.gcubeParty = {};
+    }
+
+    const party = data.gcubeParty;
+
+    if (!party.users) party.users = {};
+    if (!Array.isArray(party.history)) party.history = [];
+    if (!party.invites) party.invites = {};
+    if (!party.settings) party.settings = {};
+
+    return data;
   } catch (error) {
-    console.error("GCube Party data error:", error.message);
-    return null;
+    console.error(
+      "[GCube] Failed to load data:",
+      error.message
+    );
+
+    throw new Error("GCube data could not be loaded.");
   }
 }
 
-function saveData(data) {
+// ==================================================
+// SAFE DATA SAVING
+// Preserves AI and other existing data.
+// ==================================================
+
+function saveGCubeData(data) {
+  const tempFile = `${GCUBE_DATA_FILE}.gcube.tmp`;
+
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    const serialized = JSON.stringify(data, null, 2);
+
+    fs.writeFileSync(tempFile, serialized, "utf8");
+    fs.renameSync(tempFile, GCUBE_DATA_FILE);
+
     return true;
   } catch (error) {
-    console.error("GCube Party save error:", error.message);
-    return false;
+    console.error(
+      "[GCube] Failed to save data:",
+      error.message
+    );
+
+    try {
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+    } catch {}
+
+    throw new Error("GCube data could not be saved.");
   }
 }
 
-function getUser(data, userId) {
-  if (!data || !data.gcubeParty) {
-    throw new Error("GCube Party data is not loaded.");
-  }
+// ==================================================
+// USER ACCOUNT
+// ==================================================
 
-  if (!data.gcubeParty.users[userId]) {
-    data.gcubeParty.users[userId] = {
+function getGCubeUser(data, userId) {
+  const party = data.gcubeParty;
+
+  if (!party.users[userId]) {
+    party.users[userId] = {
       balance: 0,
+
       totalEarned: 0,
       totalSpent: 0,
-      messages: { date: todayIndia(), count: 0, claimed: [] },
-      invites: { total: 0, claimed: [] },
-      quests: { date: todayIndia(), completed: [], claimed: [] },
+
+      messagesToday: 0,
+      messageDay: "",
+
+      claimedMessageRewards: [],
+
       collection: [],
+      materials: {},
+
+      dailyQuests: {},
+      weeklyQuests: {},
+
+      achievements: [],
+      titles: [],
+
+      frames: [],
+      backgrounds: [],
+      nameplates: [],
+
       equipped: {
-        collectible: null,
         frame: null,
         background: null,
-        nameplate: null,
-        effect: null
+        nameplate: null
       },
-      stats: { tradesCompleted: 0, itemsUpgraded: 0 }
+
+      createdAt: new Date().toISOString()
     };
   }
 
-  const user = data.gcubeParty.users[userId];
+  const user = party.users[userId];
 
-  if (!Number.isFinite(user.balance)) user.balance = 0;
-  if (!Number.isFinite(user.totalEarned)) user.totalEarned = 0;
-  if (!Number.isFinite(user.totalSpent)) user.totalSpent = 0;
-  if (!user.messages) user.messages = { date: todayIndia(), count: 0, claimed: [] };
-  if (!user.invites) user.invites = { total: 0, claimed: [] };
-  if (!user.quests) user.quests = { date: todayIndia(), completed: [], claimed: [] };
-  if (!Array.isArray(user.collection)) user.collection = [];
-
-  if (user.messages.date !== todayIndia()) {
-    user.messages = { date: todayIndia(), count: 0, claimed: [] };
+  if (!Number.isFinite(Number(user.balance))) {
+    user.balance = 0;
   }
 
-  if (user.quests.date !== todayIndia()) {
-    user.quests = { date: todayIndia(), completed: [], claimed: [] };
+  if (!Array.isArray(user.collection)) {
+    user.collection = [];
+  }
+
+  if (!user.materials || typeof user.materials !== "object") {
+    user.materials = {};
+  }
+
+  if (!Array.isArray(user.claimedMessageRewards)) {
+    user.claimedMessageRewards = [];
+  }
+
+  if (!user.equipped) {
+    user.equipped = {
+      frame: null,
+      background: null,
+      nameplate: null
+    };
   }
 
   return user;
 }
 
-function addGC(user, amount) {
-  if (!Number.isSafeInteger(amount) || amount <= 0) {
+// ==================================================
+// ECONOMY HELPERS
+// ==================================================
+
+function addGC(data, user, amount) {
+  const value = Math.floor(Number(amount));
+
+  if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error("Invalid GC amount.");
   }
 
-  user.balance += amount;
-  user.totalEarned += amount;
+  const current = Number(user.balance) || 0;
+
+  if (current + value > Number.MAX_SAFE_INTEGER) {
+    throw new Error("GC balance limit reached.");
+  }
+
+  user.balance = current + value;
+  user.totalEarned =
+    (Number(user.totalEarned) || 0) + value;
+
+  return user.balance;
 }
 
-function spendGC(user, amount) {
-  if (!Number.isSafeInteger(amount) || amount <= 0 || user.balance < amount) {
+function spendGC(data, user, amount) {
+  const value = Math.floor(Number(amount));
+
+  if (!Number.isSafeInteger(value) || value <= 0) {
     return false;
   }
 
-  user.balance -= amount;
-  user.totalSpent += amount;
+  const balance = Number(user.balance) || 0;
+
+  if (balance < value) {
+    return false;
+  }
+
+  user.balance = balance - value;
+  user.totalSpent =
+    (Number(user.totalSpent) || 0) + value;
+
   return true;
 }
 
-function makeEmbed(title, description) {
-  return new EmbedBuilder()
-    .setColor(0x7C4DFF)
-    .setTitle(`💎 ${title}`)
-    .setDescription(description)
-    .setFooter({ text: "GCube Party • Elyx Trading" })
-    .setTimestamp();
+function formatGC(amount) {
+  return Math.floor(Number(amount) || 0).toLocaleString("en-IN");
 }
 
-const gcubeHelpCommand = new SlashCommandBuilder()
-  .setName("gcube-help")
-  .setDescription("GCube Party game tutorial aur commands dekho");
+// ==================================================
+// ROOT COMMAND
+// Every GCube feature will use /gcube.
+// ==================================================
 
-async function handleGCubeHelp(interaction) {
-  const embed = makeEmbed(
-    "GCUBE PARTY — HOW TO PLAY",
-    "Welcome! GC earn karo, rare collectibles collect karo, items upgrade karo aur members ke saath trade karo."
+const gcubeCommand = new SlashCommandBuilder()
+  .setName("gcube")
+  .setDescription("GCube Party — economy, rewards and collectibles")
+
+  .addSubcommand(sub =>
+    sub
+      .setName("balance")
+      .setDescription("Check your GC wallet")
   );
 
-  embed.addFields(
-    {
-      name: "💬 Daily Message Rewards",
-      value: "10 messages = 5 GC\n100 messages = 10 GC\n1,000 messages = 50 GC\nDaily progress India time midnight par reset hogi."
-    },
-    {
-      name: "🎟️ Invite Rewards",
-      value: "5 invites = 5 GC\n10 invites = 10 GC\n25 invites = 30 GC\n50 invites = 75 GC\n100 invites = 200 GC\nInvite progress daily reset nahi hogi."
-    },
-    {
-      name: "🎯 Daily Quests",
-      value: "Daily missions complete karke extra GC earn karo."
-    },
-    {
-      name: "🛍️ Shop & Collection",
-      value: "Collectibles, frames, backgrounds aur upgrade materials khareedo. Apni collection aur profile flex karo."
-    },
-    {
-      name: "⚒️ Upgrades",
-      value: "Upgrade materials use karke supported collectibles ko improve karo."
-    },
-    {
-      name: "🔄 Trading",
-      value: "Eligible items aur GC ko dusre members ke saath secure confirmation ke through trade karo."
-    },
-    {
-      name: "🌅 Important Rules",
-      value: "Refresh sirf progress update karega. Reward claim karna zaroori hai. Daily progress reset hogi, lekin GC balance aur collection safe rahenge."
-    }
-  );
+// ==================================================
+// SUBCOMMAND REGISTRY
+// Later parts will register their handlers here.
+// ==================================================
 
-  await interaction.reply({ embeds: [embed], ephemeral: true });
+const gcubeSubcommandHandlers = new Map();
+
+function registerGCubeSubcommand(name, handler) {
+  if (gcubeSubcommandHandlers.has(name)) {
+    throw new Error(
+      `[GCube] Duplicate subcommand handler: ${name}`
+    );
+  }
+
+  gcubeSubcommandHandlers.set(name, handler);
 }
 
-module.exports = {
-  loadData,
-  saveData,
-  getUser,
-  addGC,
-  spendGC,
-  makeEmbed,
-  todayIndia,
-  DAILY_MESSAGE_REWARDS,
-  INVITE_REWARDS,
-  SHOP_ITEMS,
-  gcubeHelpCommand,
-  handleGCubeHelp,
-  SlashCommandBuilder,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
-};
-// ==========================================
-// GCUBE PARTY - PART 2: BALANCE & REWARDS
-// ==========================================
-
-const gcubeBalanceCommand = new SlashCommandBuilder()
-.setName("gcube")
-.setDescription("GCube Party ke saare commands")
-.addSubcommand(sub =>
-sub
-.setName("balance")
-.setDescription("Apna GCube balance check karo")
-)
-.addSubcommand(sub =>
-sub
-.setName("rewards")
-.setDescription("Daily rewards aur message progress dekho")
-)
-.addSubcommand(sub =>
-sub
-.setName("invites")
-.setDescription("Apne invites aur rewards dekho")
-)
-.addSubcommand(sub =>
-sub
-.setName("quests")
-.setDescription("Available quests dekho")
-)
-.addSubcommand(sub =>
-sub
-.setName("shop")
-.setDescription("GCube shop dekho")
-)
-.addSubcommand(sub =>
-sub
-.setName("collection")
-.setDescription("Apni collection dekho")
-)
-.addSubcommand(sub =>
-sub
-.setName("profile")
-.setDescription("Apna GCube profile dekho")
-)
-.addSubcommand(sub =>
-sub
-.setName("top")
-.setDescription("GCube leaderboard dekho")
-)
-.addSubcommand(sub =>
-sub
-.setName("showcase")
-.setDescription("Apna showcase dekho")
-)
-.addSubcommand(sub =>
-sub
-.setName("history")
-.setDescription("Recent GCube transactions dekho")
-);
-
-const gcubeRewardsCommand = new SlashCommandBuilder()
-  .setName("gcube-rewards")
-  .setDescription("Daily rewards aur message progress dekho");
-
-function buildRewardsEmbed(user) {
-  const progress = user.messages.count;
-  const claimed = user.messages.claimed;
-
-  const lines = DAILY_MESSAGE_REWARDS.map((tier) => {
-    const done = progress >= tier.messages;
-    const alreadyClaimed = claimed.includes(tier.messages);
-
-    let status = "🔒 Locked";
-    if (alreadyClaimed) status = "✅ Claimed";
-    else if (done) status = "🎁 Ready to claim";
-
-    return `${done ? "🟢" : "⚪"} **${tier.messages.toLocaleString()} messages** → **${tier.reward} GC**\n└ ${status}`;
-  });
-
-  return makeEmbed(
-    "Daily Message Rewards",
-    `💬 **Today's messages:** ${progress.toLocaleString()}\n\n` +
-    lines.join("\n\n") +
-    "\n\n🔄 Refresh sirf progress update karta hai.\n" +
-    "🎁 Claim button eligible rewards hi deta hai.\n" +
-    "🌅 Daily progress India time midnight par reset hoti hai.\n" +
-    "💎 Tumhara GC balance reset nahi hoga."
-  );
-}
-
-function buildRewardsButtons() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("gcube_rewards_refresh")
-      .setLabel("Refresh")
-      .setEmoji("🔄")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("gcube_rewards_claim")
-      .setLabel("Claim Reward")
-      .setEmoji("🎁")
-      .setStyle(ButtonStyle.Success)
-  );
-}
+// ==================================================
+// BALANCE COMMAND
+// ==================================================
 
 async function handleGCubeBalance(interaction) {
-  const data = loadData();
+  const data = loadGCubeData();
 
-  if (!data) {
-    return interaction.reply({
-      content: "❌ Data load nahi hua. Bot logs check karo.",
-      ephemeral: true
-    });
-  }
-
-  const user = getUser(data, interaction.user.id);
-
-  if (!saveData(data)) {
-    return interaction.reply({
-      content: "❌ Data save nahi hua. Dobara try karo.",
-      ephemeral: true
-    });
-  }
-
-  const embed = makeEmbed(
-    "Your GCube Balance",
-    `👤 **Member:** ${interaction.user.username}\n` +
-    `💎 **Balance:** ${user.balance.toLocaleString()} GC\n` +
-    `📈 **Total earned:** ${user.totalEarned.toLocaleString()} GC\n` +
-    `🛍️ **Total spent:** ${user.totalSpent.toLocaleString()} GC\n` +
-    `🎴 **Collectibles:** ${user.collection.length}`
+  const user = getGCubeUser(
+    data,
+    interaction.user.id
   );
 
-  embed.setThumbnail(interaction.user.displayAvatarURL({ size: 256 }));
+  // Save a newly created account.
+  saveGCubeData(data);
 
-  return interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-async function handleGCubeRewards(interaction) {
-  const data = loadData();
-
-  if (!data) {
-    return interaction.reply({
-      content: "❌ Data load nahi hua. Bot logs check karo.",
-      ephemeral: true
-    });
-  }
-
-  const user = getUser(data, interaction.user.id);
-
-  if (!saveData(data)) {
-    return interaction.reply({
-      content: "❌ Data save nahi hua. Dobara try karo.",
-      ephemeral: true
-    });
-  }
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle("💰 GCube Wallet")
+    .setThumbnail(interaction.user.displayAvatarURL())
+    .setDescription(
+      `**${interaction.user.username}**'s GCube account`
+    )
+    .addFields(
+      {
+        name: "🪙 Current Balance",
+        value: `**${formatGC(user.balance)} GC**`,
+        inline: true
+      },
+      {
+        name: "📈 Total Earned",
+        value: `**${formatGC(user.totalEarned)} GC**`,
+        inline: true
+      },
+      {
+        name: "🛒 Total Spent",
+        value: `**${formatGC(user.totalSpent)} GC**`,
+        inline: true
+      },
+      {
+        name: "🎒 Collectibles",
+        value: `**${user.collection.length}**`,
+        inline: true
+      }
+    )
+    .setFooter({
+      text: "Elyx Trading • GCube Party"
+    })
+    .setTimestamp();
 
   return interaction.reply({
-    embeds: [buildRewardsEmbed(user)],
-    components: [buildRewardsButtons()],
+    embeds: [embed],
     ephemeral: true
   });
 }
 
-async function handleGCubeRewardButton(interaction) {
-  const data = loadData();
+registerGCubeSubcommand(
+  "balance",
+  handleGCubeBalance
+);
 
-  if (!data) {
+// ==================================================
+// ROOT INTERACTION HANDLER
+// ==================================================
+
+async function handleGCubeRoot(interaction) {
+  const subcommand = interaction.options.getSubcommand();
+
+  const handler = gcubeSubcommandHandlers.get(subcommand);
+
+  if (typeof handler !== "function") {
     return interaction.reply({
-      content: "❌ Data load nahi hua.",
+      content: "❌ This GCube feature is not available yet.",
       ephemeral: true
     });
   }
 
-  const user = getUser(data, interaction.user.id);
-
-  if (interaction.customId === "gcube_rewards_refresh") {
-    if (!saveData(data)) {
-      return interaction.reply({
-        content: "❌ Progress save nahi hua.",
-        ephemeral: true
-      });
-    }
-
-    return interaction.update({
-      embeds: [buildRewardsEmbed(user)],
-      components: [buildRewardsButtons()]
-    });
-  }
-
-  if (interaction.customId === "gcube_rewards_claim") {
-    const eligible = DAILY_MESSAGE_REWARDS.filter((tier) =>
-      user.messages.count >= tier.messages &&
-      !user.messages.claimed.includes(tier.messages)
-    );
-
-    if (eligible.length === 0) {
-      return interaction.reply({
-        content: "🎁 Abhi koi naya reward claim karne ke liye available nahi hai!",
-        ephemeral: true
-      });
-    }
-
-    const totalReward = eligible.reduce((sum, tier) => sum + tier.reward, 0);
-
-    // Claim all eligible milestones once.
-    for (const tier of eligible) {
-      user.messages.claimed.push(tier.messages);
-    }
-
-    addGC(user, totalReward);
-
-    data.gcubeParty.history.push({
-      type: "daily_message_reward",
-      userId: interaction.user.id,
-      amount: totalReward,
-      date: todayIndia(),
-      time: new Date().toISOString()
-    });
-
-    if (!saveData(data)) {
-      // Do not report a successful claim when saving fails.
-      return interaction.reply({
-        content: "❌ Reward save nahi hua. Admin ko logs check karne bolo.",
-        ephemeral: true
-      });
-    }
-
-    return interaction.update({
-      embeds: [
-        buildRewardsEmbed(user).setDescription(
-          `🎉 **${totalReward} GC claimed!**\n` +
-          `💎 New balance: **${user.balance.toLocaleString()} GC**\n\n` +
-          DAILY_MESSAGE_REWARDS.map((tier) => {
-            const done = user.messages.count >= tier.messages;
-            const claimed = user.messages.claimed.includes(tier.messages);
-            return `${done && claimed ? "✅" : "⚪"} ${tier.messages.toLocaleString()} messages → ${tier.reward} GC`;
-          }).join("\n")
-        )
-      ],
-      components: [buildRewardsButtons()]
-    });
-  }
-}
-
-// Count ordinary member messages.
-// This function must be connected to the bot's existing messageCreate event.
-async function handleGCubeMessage(message) {
-  if (!message.guild || message.author.bot || message.webhookId) return;
-
-  const data = loadData();
-  if (!data) return;
-
-  const user = getUser(data, message.author.id);
-
-  user.messages.count += 1;
-
-  // Track today's message quest progress for the future quest system.
-  user.quests.messageCount = (user.quests.messageCount || 0) + 1;
-
-  saveData(data);
-}
-
-// Add these properties to the exports from Part 1.
-module.exports.gcubeBalanceCommand = gcubeBalanceCommand;
-module.exports.gcubeRewardsCommand = gcubeRewardsCommand;
-module.exports.handleGCubeBalance = handleGCubeBalance;
-module.exports.handleGCubeRewards = handleGCubeRewards;
-module.exports.handleGCubeRewardButton = handleGCubeRewardButton;
-module.exports.handleGCubeMessage = handleGCubeMessage;
-// ==========================================
-// GCUBE PARTY - PART 3: INVITE REWARDS
-// ==========================================
-
-const gcubeInviteRewardsCommand = new SlashCommandBuilder()
-  .setName("gcube-invites")
-  .setDescription("Apna invite progress aur rewards dekho");
-
-const gcubeInviteClaimCommand = new SlashCommandBuilder()
-  .setName("gcube-invite-claim")
-  .setDescription("Eligible invite milestone rewards claim karo");
-
-// Cache used to compare invite uses when a new member joins.
-const gcubeInviteCache = new Map();
-
-async function cacheGuildInvites(guild) {
   try {
-    const invites = await guild.invites.fetch();
-    gcubeInviteCache.set(
-      guild.id,
-      new Map(invites.map(invite => [invite.code, invite.uses || 0]))
-    );
+    await handler(interaction);
   } catch (error) {
     console.error(
-      `GCube Party: Could not fetch invites for ${guild.id}:`,
-      error.message
+      `[GCube] /gcube ${subcommand} failed:`,
+      error
     );
+
+    const reply = {
+      content: "❌ GCube mein error aaya. Please try again.",
+      ephemeral: true
+    };
+
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(reply).catch(() => {});
+    } else {
+      await interaction.reply(reply).catch(() => {});
+    }
   }
 }
 
-async function handleGCubeMemberJoin(client, member) {
-  if (!member.guild || member.user.bot) return;
+// ==================================================
+// EXPORTS
+// ==================================================
 
-  const before = gcubeInviteCache.get(member.guild.id);
+module.exports.gcubeCommand = gcubeCommand;
+module.exports.handleGCubeRoot = handleGCubeRoot;
+module.exports.loadGCubeData = loadGCubeData;
+module.exports.saveGCubeData = saveGCubeData;
+module.exports.getGCubeUser = getGCubeUser;
+module.exports.addGC = addGC;
+module.exports.spendGC = spendGC;
+module.exports.formatGC = formatGC;
+module.exports.registerGCubeSubcommand =
+  registerGCubeSubcommand;
+// ==================================================
+// GCUBE PARTY — PART 2
+// DAILY REWARDS + CLAIM SYSTEM
+// ==================================================
 
-  // If cache wasn't initialized, initialize it now.
-  // This join cannot safely be attributed, so it isn't counted.
-  if (!before) {
-    await cacheGuildInvites(member.guild);
+const GCUBE_DAILY_REWARDS = [
+  { day: 1, amount: 100 },
+  { day: 2, amount: 150 },
+  { day: 3, amount: 200 },
+  { day: 4, amount: 250 },
+  { day: 5, amount: 350 },
+  { day: 6, amount: 450 },
+  { day: 7, amount: 750 }
+];
+
+// India calendar date: YYYY-MM-DD
+function getGCubeIndiaDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
+
+function getGCubeYesterday() {
+  const today = getGCubeIndiaDate();
+  const date = new Date(`${today}T12:00:00+05:30`);
+
+  date.setUTCDate(date.getUTCDate() - 1);
+
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+// Add the subcommand to the existing root command.
+gcubeCommand.addSubcommand(sub =>
+  sub
+    .setName("rewards")
+    .setDescription("View and claim your daily GC rewards")
+);
+
+// Daily rewards handler
+async function handleGCubeRewards(interaction) {
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+
+  if (!user.dailyRewards || typeof user.dailyRewards !== "object") {
+    user.dailyRewards = {
+      lastClaimDate: null,
+      streak: 0,
+      totalClaims: 0
+    };
+  }
+
+  const today = getGCubeIndiaDate();
+  const yesterday = getGCubeYesterday();
+
+  const rewards = user.dailyRewards;
+  const alreadyClaimed = rewards.lastClaimDate === today;
+
+  let nextStreak;
+
+  if (alreadyClaimed) {
+    nextStreak = Math.max(1, Number(rewards.streak) || 1);
+  } else if (rewards.lastClaimDate === yesterday) {
+    nextStreak = (Number(rewards.streak) || 0) + 1;
+  } else {
+    nextStreak = 1;
+  }
+
+  const rewardDay = ((nextStreak - 1) % 7) + 1;
+  const nextReward = GCUBE_DAILY_REWARDS[rewardDay - 1];
+
+  const embed = new EmbedBuilder()
+    .setColor(0xF1C40F)
+    .setTitle("🎁 GCube Daily Rewards")
+    .setDescription(
+      alreadyClaimed
+        ? "✅ You have already claimed today's reward."
+        : "Claim your daily GC and keep your streak alive!"
+    )
+    .addFields(
+      {
+        name: "💰 Today's Reward",
+        value: `**${nextReward.amount.toLocaleString("en-IN")} GC**`,
+        inline: true
+      },
+      {
+        name: "🔥 Current Streak",
+        value: `**${alreadyClaimed ? rewards.streak : nextStreak - 1} day(s)**`,
+        inline: true
+      },
+      {
+        name: "📅 Reward Day",
+        value: `**Day ${rewardDay}/7**`,
+        inline: true
+      }
+    )
+    .setFooter({
+      text: "Elyx Trading • GCube Party"
+    })
+    .setTimestamp();
+
+  const button = new (
+    require("discord.js").ActionRowBuilder
+  )().addComponents(
+    new (
+      require("discord.js").ButtonBuilder
+    )()
+      .setCustomId("gcube_rewards_claim")
+      .setLabel(alreadyClaimed ? "Already Claimed" : "Claim Daily Reward")
+      .setStyle(
+        alreadyClaimed
+          ? require("discord.js").ButtonStyle.Secondary
+          : require("discord.js").ButtonStyle.Success
+      )
+      .setDisabled(alreadyClaimed)
+  );
+
+  saveGCubeData(data);
+
+  return interaction.reply({
+    embeds: [embed],
+    components: [button],
+    ephemeral: true
+  });
+}
+
+// Handle the claim button.
+async function handleGCubeRewardButton(interaction) {
+  if (interaction.customId !== "gcube_rewards_claim") {
     return;
   }
 
-  try {
-    const currentInvites = await member.guild.invites.fetch();
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
 
-    let usedInvite = null;
-
-    for (const invite of currentInvites.values()) {
-      const oldUses = before.get(invite.code) || 0;
-      const newUses = invite.uses || 0;
-
-      if (newUses > oldUses) {
-        usedInvite = invite;
-        break;
-      }
-    }
-
-    // Refresh cache for the next join.
-    gcubeInviteCache.set(
-      member.guild.id,
-      new Map(
-        currentInvites.map(invite => [invite.code, invite.uses || 0])
-      )
-    );
-
-    // Vanity URL, unavailable permissions, or uncertain attribution:
-    // don't award an invite to a guessed inviter.
-    if (!usedInvite || !usedInvite.inviter || usedInvite.inviter.bot) {
-      return;
-    }
-
-    const data = loadData();
-    if (!data) return;
-
-    const party = data.gcubeParty;
-    if (!party.inviteTracking) party.inviteTracking = {};
-    if (!party.inviteTracking.countedMembers) {
-      party.inviteTracking.countedMembers = {};
-    }
-
-    // A person can only count once across leave/rejoin cycles.
-    const memberKey = `${member.guild.id}:${member.id}`;
-
-    if (party.inviteTracking.countedMembers[memberKey]) return;
-
-    const inviterId = usedInvite.inviter.id;
-    const inviter = getUser(data, inviterId);
-
-    inviter.invites.total += 1;
-    party.inviteTracking.countedMembers[memberKey] = {
-      inviterId,
-      guildId: member.guild.id,
-      joinedAt: new Date().toISOString()
+  if (!user.dailyRewards || typeof user.dailyRewards !== "object") {
+    user.dailyRewards = {
+      lastClaimDate: null,
+      streak: 0,
+      totalClaims: 0
     };
-
-    party.history.push({
-      type: "successful_invite",
-      inviterId,
-      memberId: member.id,
-      guildId: member.guild.id,
-      time: new Date().toISOString()
-    });
-
-    saveData(data);
-  } catch (error) {
-    console.error("GCube Party invite tracking error:", error.message);
   }
-}
 
-async function handleGCubeInvites(interaction) {
-  const data = loadData();
+  const today = getGCubeIndiaDate();
+  const yesterday = getGCubeYesterday();
+  const rewards = user.dailyRewards;
 
-  if (!data) {
+  if (rewards.lastClaimDate === today) {
     return interaction.reply({
-      content: "❌ Data load nahi hua. Bot logs check karo.",
+      content: "❌ You have already claimed today's reward.",
       ephemeral: true
     });
   }
 
-  const user = getUser(data, interaction.user.id);
+  const streak =
+    rewards.lastClaimDate === yesterday
+      ? (Number(rewards.streak) || 0) + 1
+      : 1;
 
-  const rewardLines = INVITE_REWARDS.map(tier => {
-    const eligible = user.invites.total >= tier.invites;
-    const claimed = user.invites.claimed.includes(tier.invites);
+  const rewardDay = ((streak - 1) % 7) + 1;
+  const reward = GCUBE_DAILY_REWARDS[rewardDay - 1];
 
-    let status = "🔒 Locked";
-    if (claimed) status = "✅ Claimed";
-    else if (eligible) status = "🎁 Ready to claim";
+  addGC(data, user, reward.amount);
 
-    return `${eligible ? "🟢" : "⚪"} **${tier.invites} invites → ${tier.reward} GC**\n└ ${status}`;
-  });
-
-  const embed = makeEmbed(
-    "🎟️ Your Invite Rewards",
-    `👤 ${interaction.user.username}\n` +
-    `🎟️ **Successful invites:** ${user.invites.total}\n\n` +
-    rewardLines.join("\n\n") +
-    "\n\nInvite progress daily reset nahi hoti.\n" +
-    "Reward ke liye `/gcube-invite-claim` use karo."
-  );
-
-  if (!saveData(data)) {
-    return interaction.reply({
-      content: "❌ Data save nahi hua.",
-      ephemeral: true
-    });
-  }
-
-  return interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-async function handleGCubeInviteClaim(interaction) {
-  const data = loadData();
-
-  if (!data) {
-    return interaction.reply({
-      content: "❌ Data load nahi hua.",
-      ephemeral: true
-    });
-  }
-
-  const user = getUser(data, interaction.user.id);
-
-  const eligible = INVITE_REWARDS.filter(tier =>
-    user.invites.total >= tier.invites &&
-    !user.invites.claimed.includes(tier.invites)
-  );
-
-  if (eligible.length === 0) {
-    return interaction.reply({
-      content: "🎟️ Abhi koi naya invite milestone reward available nahi hai.",
-      ephemeral: true
-    });
-  }
-
-  const total = eligible.reduce((sum, tier) => sum + tier.reward, 0);
-
-  for (const tier of eligible) {
-    user.invites.claimed.push(tier.invites);
-  }
-
-  addGC(user, total);
+  rewards.lastClaimDate = today;
+  rewards.streak = streak;
+  rewards.totalClaims = (Number(rewards.totalClaims) || 0) + 1;
 
   data.gcubeParty.history.push({
-    type: "invite_milestone_reward",
+    type: "daily_reward",
     userId: interaction.user.id,
-    amount: total,
-    milestones: eligible.map(tier => tier.invites),
-    time: new Date().toISOString()
+    amount: reward.amount,
+    date: today,
+    timestamp: new Date().toISOString()
   });
 
-  if (!saveData(data)) {
-    return interaction.reply({
-      content: "❌ Reward save nahi hua. Dobara try karne se pehle admin ko logs check karne bolo.",
-      ephemeral: true
+  // Keep the history bounded.
+  if (data.gcubeParty.history.length > 2000) {
+    data.gcubeParty.history =
+      data.gcubeParty.history.slice(-2000);
+  }
+
+  saveGCubeData(data);
+
+  return interaction.update({
+    content: `🎉 Daily reward claimed! You received **${reward.amount.toLocaleString("en-IN")} GC**.`,
+    embeds: [],
+    components: []
+  });
+}
+
+// Register rewards in the existing subcommand system.
+registerGCubeSubcommand(
+  "rewards",
+  handleGCubeRewards
+);
+
+// Export this handler for index.js button integration.
+module.exports.handleGCubeRewardButton =
+  handleGCubeRewardButton;
+// ==================================================
+// GCUBE PARTY — PART 3
+// INVITE TRACKING + INVITE REWARDS
+// ==================================================
+
+const GCUBE_INVITE_REWARD = 100;
+
+const gcubeInviteCache = new Map();
+
+// Add /gcube invites to the existing root command.
+gcubeCommand.addSubcommand(sub =>
+  sub
+    .setName("invites")
+    .setDescription("View your invite statistics and rewards")
+);
+
+// Cache invite usage for a guild.
+async function cacheGuildInvites(guild) {
+  try {
+    const invites = await guild.invites.fetch();
+
+    const inviteData = new Map();
+
+    for (const invite of invites.values()) {
+      inviteData.set(invite.code, {
+        uses: invite.uses || 0,
+        inviterId: invite.inviter?.id || null
+      });
+    }
+
+    gcubeInviteCache.set(guild.id, inviteData);
+
+    return true;
+  } catch (error) {
+    console.error(
+      `[GCube] Could not cache invites for ${guild.id}:`,
+      error.message
+    );
+
+    return false;
+  }
+}
+
+// Track a new member joining a server.
+async function handleGCubeMemberJoin(client, member) {
+  if (!member || !member.guild || member.user.bot) {
+    return;
+  }
+
+  const guild = member.guild;
+  const previousInvites = gcubeInviteCache.get(guild.id);
+
+  if (!previousInvites) {
+    await cacheGuildInvites(guild);
+    return;
+  }
+
+  let currentInvites;
+
+  try {
+    currentInvites = await guild.invites.fetch();
+  } catch (error) {
+    console.error(
+      `[GCube] Invite fetch failed for ${guild.id}:`,
+      error.message
+    );
+
+    return;
+  }
+
+  let usedInvite = null;
+
+  for (const invite of currentInvites.values()) {
+    const previous = previousInvites.get(invite.code);
+
+    const previousUses = previous?.uses || 0;
+    const currentUses = invite.uses || 0;
+
+    if (
+      currentUses > previousUses &&
+      invite.inviter?.id
+    ) {
+      usedInvite = invite;
+      break;
+    }
+  }
+
+  // Refresh the cache even when the inviter cannot be identified.
+  const refreshedInvites = new Map();
+
+  for (const invite of currentInvites.values()) {
+    refreshedInvites.set(invite.code, {
+      uses: invite.uses || 0,
+      inviterId: invite.inviter?.id || null
     });
   }
 
+  gcubeInviteCache.set(guild.id, refreshedInvites);
+
+  if (!usedInvite || !usedInvite.inviter) {
+    return;
+  }
+
+  const inviterId = usedInvite.inviter.id;
+
+  // Never reward self-invites.
+  if (inviterId === member.id) {
+    return;
+  }
+
+  const data = loadGCubeData();
+
+  const inviter = getGCubeUser(data, inviterId);
+
+  if (!inviter.inviteStats) {
+    inviter.inviteStats = {
+      total: 0,
+      rewarded: 0,
+      invitedUsers: []
+    };
+  }
+
+  if (!Array.isArray(inviter.inviteStats.invitedUsers)) {
+    inviter.inviteStats.invitedUsers = [];
+  }
+
+  // Prevent duplicate rewards for the same member.
+  if (inviter.inviteStats.invitedUsers.includes(member.id)) {
+    return;
+  }
+
+  inviter.inviteStats.invitedUsers.push(member.id);
+  inviter.inviteStats.total += 1;
+  inviter.inviteStats.rewarded += GCUBE_INVITE_REWARD;
+
+  addGC(data, inviter, GCUBE_INVITE_REWARD);
+
+  data.gcubeParty.history.push({
+    type: "invite_reward",
+    userId: inviterId,
+    invitedUserId: member.id,
+    guildId: guild.id,
+    amount: GCUBE_INVITE_REWARD,
+    timestamp: new Date().toISOString()
+  });
+
+  if (data.gcubeParty.history.length > 2000) {
+    data.gcubeParty.history =
+      data.gcubeParty.history.slice(-2000);
+  }
+
+  saveGCubeData(data);
+
+  console.log(
+    `[GCube] Awarded ${GCUBE_INVITE_REWARD} GC to ${inviterId} for an invite.`
+  );
+}
+
+// Show invite statistics.
+async function handleGCubeInvites(interaction) {
+  const data = loadGCubeData();
+
+  const user = getGCubeUser(
+    data,
+    interaction.user.id
+  );
+
+  const stats = user.inviteStats || {
+    total: 0,
+    rewarded: 0,
+    invitedUsers: []
+  };
+
+  const embed = new EmbedBuilder()
+    .setColor(0x57F287)
+    .setTitle("🎟️ GCube Invite Rewards")
+    .setDescription(
+      "Invite real members and earn GC when their invite can be verified."
+    )
+    .addFields(
+      {
+        name: "👥 Tracked Invites",
+        value: `**${stats.total || 0}**`,
+        inline: true
+      },
+      {
+        name: "💰 GC Earned",
+        value: `**${formatGC(stats.rewarded || 0)} GC**`,
+        inline: true
+      },
+      {
+        name: "🎁 Reward Per Invite",
+        value: `**${GCUBE_INVITE_REWARD} GC**`,
+        inline: true
+      }
+    )
+    .setFooter({
+      text: "Elyx Trading • GCube Party"
+    })
+    .setTimestamp();
+
   return interaction.reply({
-    content:
-      `🎉 Invite rewards claimed: **${total} GC**!\n` +
-      `💎 New balance: **${user.balance} GC**`,
+    embeds: [embed],
     ephemeral: true
   });
 }
 
-// Export commands and handlers for index.js integration later.
-module.exports.gcubeInviteRewardsCommand = gcubeInviteRewardsCommand;
-module.exports.gcubeInviteClaimCommand = gcubeInviteClaimCommand;
-module.exports.handleGCubeInvites = handleGCubeInvites;
-module.exports.handleGCubeInviteClaim = handleGCubeInviteClaim;
-module.exports.cacheGuildInvites = cacheGuildInvites;
-module.exports.handleGCubeMemberJoin = handleGCubeMemberJoin;
-// ==========================================
-// GCUBE PARTY - PART 4: DAILY QUESTS
-// ==========================================
+// Register the subcommand handler.
+registerGCubeSubcommand(
+  "invites",
+  handleGCubeInvites
+);
+// ==================================================
+// GCUBE PARTY — PART 4
+// DAILY QUESTS + MESSAGE TRACKING
+// ==================================================
 
-const gcubeQuestsCommand = new SlashCommandBuilder()
-  .setName("gcube-quests")
-  .setDescription("Daily quests aur progress dekho");
-
-const gcubeQuestClaimCommand = new SlashCommandBuilder()
-  .setName("gcube-quest-claim")
-  .setDescription("Complete daily quests ke GC claim karo");
-
-const GCUBE_DAILY_QUESTS = [
-  { id: "messages_20", messages: 20, reward: 5, name: "Active Member" },
-  { id: "messages_50", messages: 50, reward: 10, name: "Chat Champion" },
-  { id: "messages_200", messages: 200, reward: 20, name: "Chat Legend" }
+const GCUBE_QUESTS = [
+  {
+    id: "messages_10",
+    name: "Chat Starter",
+    description: "Send 10 messages in the server",
+    target: 10,
+    reward: 100
+  },
+  {
+    id: "messages_25",
+    name: "Active Member",
+    description: "Send 25 messages in the server",
+    target: 25,
+    reward: 250
+  },
+  {
+    id: "messages_50",
+    name: "Chat Champion",
+    description: "Send 50 messages in the server",
+    target: 50,
+    reward: 500
+  }
 ];
 
-function buildGCubeQuestEmbed(user) {
-  const count = user.quests.messageCount || 0;
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("quests")
+    .setDescription("View and claim your daily GCube quests")
+);
 
-  const lines = GCUBE_DAILY_QUESTS.map(quest => {
-    const claimed = user.quests.claimed.includes(quest.id);
-    const completed = count >= quest.messages;
+function getGCubeQuestState(user) {
+  const today = getGCubeIndiaDate();
 
-    let status = "🔒 In progress";
+  if (!user.questProgress || user.questProgress.date !== today) {
+    user.questProgress = {
+      date: today,
+      messages: 0,
+      claimed: []
+    };
+  }
 
-    if (claimed) status = "✅ Claimed";
-    else if (completed) status = "🎁 Ready to claim";
+  if (!Array.isArray(user.questProgress.claimed)) {
+    user.questProgress.claimed = [];
+  }
 
-    return (
-      `**${quest.name}**\n` +
-      `💬 Messages: ${Math.min(count, quest.messages)}/${quest.messages}\n` +
-      `💎 Reward: ${quest.reward} GC\n` +
-      `Status: ${status}`
-    );
-  });
-
-  return makeEmbed(
-    "🎯 Daily Quests",
-    `💬 Today's messages: **${count}**\n\n` +
-    lines.join("\n\n") +
-    "\n\n🌅 Quests reset at midnight India time.\n" +
-    "💎 Your existing GC balance will never reset."
-  );
-}
-
-function buildGCubeQuestButtons() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("gcube_quests_refresh")
-      .setLabel("Refresh")
-      .setEmoji("🔄")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("gcube_quests_claim")
-      .setLabel("Claim Quest Rewards")
-      .setEmoji("🎁")
-      .setStyle(ButtonStyle.Success)
-  );
+  return user.questProgress;
 }
 
 async function handleGCubeQuests(interaction) {
-  const data = loadData();
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+  const progress = getGCubeQuestState(user);
 
-  if (!data) {
-    return interaction.reply({
-      content: "❌ Data load nahi hua. Admin ko logs check karne bolo.",
-      ephemeral: true
+  const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } =
+    require("discord.js");
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle("📜 GCube Daily Quests")
+    .setDescription(
+      `💬 Messages today: **${progress.messages}**\n\n` +
+      "Complete quests to earn GC. Progress resets daily."
+    )
+    .setFooter({ text: "Elyx Trading • GCube Party" })
+    .setTimestamp();
+
+  const rows = [];
+
+  for (const quest of GCUBE_QUESTS) {
+    const claimed = progress.claimed.includes(quest.id);
+    const completed = progress.messages >= quest.target;
+
+    embed.addFields({
+      name: `${claimed ? "✅" : completed ? "🎁" : "📌"} ${quest.name}`,
+      value:
+        `${quest.description}\n` +
+        `Progress: **${Math.min(progress.messages, quest.target)}/${quest.target}**\n` +
+        `Reward: **${formatGC(quest.reward)} GC**\n` +
+        `Status: **${claimed ? "Claimed" : completed ? "Ready to claim" : "In progress"}**`,
+      inline: false
     });
+
+    if (completed && !claimed) {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`gcube_quests_claim_${quest.id}`)
+            .setLabel(`Claim ${quest.reward} GC`)
+            .setStyle(ButtonStyle.Success)
+        )
+      );
+    }
   }
 
-  const user = getUser(data, interaction.user.id);
-
-  if (!user.quests.messageCount) {
-    user.quests.messageCount = 0;
-  }
-
-  if (!Array.isArray(user.quests.claimed)) {
-    user.quests.claimed = [];
-  }
-
-  if (!saveData(data)) {
-    return interaction.reply({
-      content: "❌ Quest data save nahi hua.",
-      ephemeral: true
-    });
-  }
+  saveGCubeData(data);
 
   return interaction.reply({
-    embeds: [buildGCubeQuestEmbed(user)],
-    components: [buildGCubeQuestButtons()],
-    ephemeral: true
-  });
-}
-
-async function handleGCubeQuestClaim(interaction) {
-  const data = loadData();
-
-  if (!data) {
-    return interaction.reply({
-      content: "❌ Data load nahi hua.",
-      ephemeral: true
-    });
-  }
-
-  const user = getUser(data, interaction.user.id);
-
-  if (!user.quests.messageCount) {
-    user.quests.messageCount = 0;
-  }
-
-  if (!Array.isArray(user.quests.claimed)) {
-    user.quests.claimed = [];
-  }
-
-  const eligible = GCUBE_DAILY_QUESTS.filter(quest =>
-    user.quests.messageCount >= quest.messages &&
-    !user.quests.claimed.includes(quest.id)
-  );
-
-  if (eligible.length === 0) {
-    return interaction.reply({
-      content: "🎯 Abhi koi new quest reward claim karne ke liye available nahi hai.",
-      ephemeral: true
-    });
-  }
-
-  const totalReward = eligible.reduce(
-    (total, quest) => total + quest.reward,
-    0
-  );
-
-  // Mark every eligible quest before saving.
-  for (const quest of eligible) {
-    user.quests.claimed.push(quest.id);
-  }
-
-  addGC(user, totalReward);
-
-  if (!Array.isArray(data.gcubeParty.history)) {
-    data.gcubeParty.history = [];
-  }
-
-  data.gcubeParty.history.push({
-    type: "daily_quest_reward",
-    userId: interaction.user.id,
-    amount: totalReward,
-    quests: eligible.map(quest => quest.id),
-    date: todayIndia(),
-    time: new Date().toISOString()
-  });
-
-  if (!saveData(data)) {
-    return interaction.reply({
-      content: "❌ Reward save nahi hua. Admin ko logs check karne bolo.",
-      ephemeral: true
-    });
-  }
-
-  return interaction.reply({
-    content:
-      `🎉 Quest rewards claimed: **${totalReward} GC**!\n` +
-      `💎 New balance: **${user.balance} GC**\n` +
-      `🎯 Completed quests: ${eligible.map(q => q.name).join(", ")}`,
+    embeds: [embed],
+    components: rows.slice(0, 5),
     ephemeral: true
   });
 }
 
 async function handleGCubeQuestButton(interaction) {
-  const data = loadData();
+  if (!interaction.customId.startsWith("gcube_quests_claim_")) return;
 
-  if (!data) {
+  const questId = interaction.customId.replace(
+    "gcube_quests_claim_",
+    ""
+  );
+
+  const quest = GCUBE_QUESTS.find(item => item.id === questId);
+
+  if (!quest) {
     return interaction.reply({
-      content: "❌ Data load nahi hua.",
+      content: "❌ This quest does not exist.",
       ephemeral: true
     });
   }
 
-  const user = getUser(data, interaction.user.id);
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+  const progress = getGCubeQuestState(user);
 
-  if (!user.quests.messageCount) {
-    user.quests.messageCount = 0;
-  }
-
-  if (!Array.isArray(user.quests.claimed)) {
-    user.quests.claimed = [];
-  }
-
-  if (interaction.customId === "gcube_quests_refresh") {
-    if (!saveData(data)) {
-      return interaction.reply({
-        content: "❌ Progress save nahi hua.",
-        ephemeral: true
-      });
-    }
-
-    return interaction.update({
-      embeds: [buildGCubeQuestEmbed(user)],
-      components: [buildGCubeQuestButtons()]
+  if (progress.claimed.includes(quest.id)) {
+    return interaction.reply({
+      content: "❌ You have already claimed this quest today.",
+      ephemeral: true
     });
   }
 
-  if (interaction.customId === "gcube_quests_claim") {
-    const eligible = GCUBE_DAILY_QUESTS.filter(quest =>
-      user.quests.messageCount >= quest.messages &&
-      !user.quests.claimed.includes(quest.id)
-    );
-
-    if (eligible.length === 0) {
-      return interaction.reply({
-        content: "🎯 Abhi koi quest reward available nahi hai.",
-        ephemeral: true
-      });
-    }
-
-    const totalReward = eligible.reduce(
-      (total, quest) => total + quest.reward,
-      0
-    );
-
-    for (const quest of eligible) {
-      user.quests.claimed.push(quest.id);
-    }
-
-    addGC(user, totalReward);
-
-    if (!Array.isArray(data.gcubeParty.history)) {
-      data.gcubeParty.history = [];
-    }
-
-    data.gcubeParty.history.push({
-      type: "daily_quest_reward",
-      userId: interaction.user.id,
-      amount: totalReward,
-      quests: eligible.map(quest => quest.id),
-      date: todayIndia(),
-      time: new Date().toISOString()
+  if (progress.messages < quest.target) {
+    return interaction.reply({
+      content: "❌ You haven't completed this quest yet.",
+      ephemeral: true
     });
+  }
 
-    if (!saveData(data)) {
-      return interaction.reply({
-        content: "❌ Reward save nahi hua.",
-        ephemeral: true
-      });
-    }
+  addGC(data, user, quest.reward);
+  progress.claimed.push(quest.id);
 
-    return interaction.update({
-      embeds: [
-        buildGCubeQuestEmbed(user).setDescription(
-          `🎉 **${totalReward} GC claimed!**\n` +
-          `💎 Balance: **${user.balance} GC**\n\n` +
-          GCUBE_DAILY_QUESTS.map(quest => {
-            const claimed = user.quests.claimed.includes(quest.id);
-            return `${claimed ? "✅" : "🔒"} ${quest.name} — ${quest.reward} GC`;
-          }).join("\n")
-        )
-      ],
-      components: [buildGCubeQuestButtons()]
-    });
+  data.gcubeParty.history.push({
+    type: "quest_reward",
+    userId: interaction.user.id,
+    questId: quest.id,
+    amount: quest.reward,
+    timestamp: new Date().toISOString()
+  });
+
+  if (data.gcubeParty.history.length > 2000) {
+    data.gcubeParty.history = data.gcubeParty.history.slice(-2000);
+  }
+
+  saveGCubeData(data);
+
+  return interaction.update({
+    content: `✅ Quest completed! You received **${formatGC(quest.reward)} GC**.`,
+    embeds: [],
+    components: []
+  });
+}
+
+async function handleGCubeMessage(message) {
+  if (!message || !message.guild || message.author.bot) return;
+
+  try {
+    const data = loadGCubeData();
+    const user = getGCubeUser(data, message.author.id);
+    const progress = getGCubeQuestState(user);
+
+    progress.messages += 1;
+    user.messagesToday = progress.messages;
+    user.messageDay = progress.date;
+
+    saveGCubeData(data);
+  } catch (error) {
+    console.error("[GCube] Message tracking failed:", error.message);
   }
 }
 
-// Export commands and handlers for index.js integration later.
-module.exports.gcubeQuestsCommand = gcubeQuestsCommand;
-module.exports.gcubeQuestClaimCommand = gcubeQuestClaimCommand;
-module.exports.handleGCubeQuests = handleGCubeQuests;
-module.exports.handleGCubeQuestClaim = handleGCubeQuestClaim;
+registerGCubeSubcommand("quests", handleGCubeQuests);
+
 module.exports.handleGCubeQuestButton = handleGCubeQuestButton;
-// ==========================================
-// GCUBE PARTY - PART 5: SHOP & BUY
-// ==========================================
+module.exports.handleGCubeMessage = handleGCubeMessage;
+// ==================================================
+// GCUBE PARTY — PART 5
+// SHOP + BUY SYSTEM
+// ==================================================
 
-const gcubeShopCommand = new SlashCommandBuilder()
-  .setName("gcube-shop")
-  .setDescription("GCube Party ki shop dekho");
+const GCUBE_SHOP_ITEMS = [
+  { id: "bronze_crate", name: "📦 Bronze Crate", price: 250, rarity: "Common" },
+  { id: "silver_crate", name: "🥈 Silver Crate", price: 750, rarity: "Uncommon" },
+  { id: "gold_crate", name: "🥇 Gold Crate", price: 1500, rarity: "Rare" },
+  { id: "diamond_crate", name: "💎 Diamond Crate", price: 5000, rarity: "Epic" },
+  { id: "ruby", name: "❤️ Ruby", price: 400, rarity: "Rare" },
+  { id: "sapphire", name: "💙 Sapphire", price: 400, rarity: "Rare" },
+  { id: "emerald", name: "💚 Emerald", price: 600, rarity: "Epic" },
+  { id: "golden_crown", name: "👑 Golden Crown", price: 10000, rarity: "Legendary" },
+  { id: "fire_frame", name: "🔥 Fire Frame", price: 2500, rarity: "Epic" },
+  { id: "ice_frame", name: "❄️ Ice Frame", price: 2500, rarity: "Epic" },
+  { id: "neon_frame", name: "🌈 Neon Frame", price: 4000, rarity: "Legendary" },
+  { id: "galaxy_bg", name: "🌌 Galaxy Background", price: 3500, rarity: "Epic" },
+  { id: "sunset_bg", name: "🌅 Sunset Background", price: 1800, rarity: "Rare" },
+  { id: "elite_plate", name: "⚡ Elite Nameplate", price: 3000, rarity: "Epic" },
+  { id: "elyx_trophy", name: "🏆 Elyx Trophy", price: 15000, rarity: "Legendary" }
+];
 
-const gcubeBuyCommand = new SlashCommandBuilder()
-  .setName("gcube-buy")
-  .setDescription("GC se collectible ya item khareedo")
-  .addStringOption(option =>
-    option
-      .setName("item")
-      .setDescription("Item ID select karo")
-      .setRequired(true)
-      .addChoices(
-        { name: "Shadow Wolf - 100 GC", value: "shadow_wolf" },
-        { name: "Flame Dragon - 300 GC", value: "flame_dragon" },
-        { name: "Dark Warrior - 500 GC", value: "dark_warrior" },
-        { name: "Royal King - 750 GC", value: "royal_king" },
-        { name: "Cosmic Phantom - 1500 GC", value: "cosmic_phantom" },
-        { name: "Golden Elyx - 3000 GC", value: "golden_elyx" },
-        { name: "Diamond Frame - 250 GC", value: "diamond_frame" },
-        { name: "Golden Frame - 500 GC", value: "golden_frame" },
-        { name: "Profile Background - 200 GC", value: "profile_background" },
-        { name: "Custom Nameplate - 400 GC", value: "custom_nameplate" },
-        { name: "Upgrade Stone - 100 GC", value: "upgrade_stone" },
-        { name: "Diamond Core - 500 GC", value: "diamond_core" },
-        { name: "Flame Essence - 750 GC", value: "flame_essence" },
-        { name: "Cosmic Crystal - 1500 GC", value: "cosmic_crystal" },
-        { name: "Elyx Core - 3000 GC", value: "elyx_core" }
-      )
-  );
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("shop")
+    .setDescription("Browse GCube collectibles and cosmetics")
+);
 
-// SHOP COMMAND
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("buy")
+    .setDescription("Purchase an item from the GCube shop")
+    .addStringOption(option =>
+      option.setName("item")
+        .setDescription("Choose an item to purchase")
+        .setRequired(true)
+        .addChoices(
+          ...GCUBE_SHOP_ITEMS.map(item => ({
+            name: `${item.name} — ${item.price} GC`,
+            value: item.id
+          }))
+        )
+    )
+);
+
 async function handleGCubeShop(interaction) {
-  const embed = makeEmbed(
-    "🛍️ GCube Party Shop",
-    "Items khareedne ke liye `/gcube-buy` use karo.\n" +
-    "Neeche available items aur prices hain."
-  );
+  const { EmbedBuilder } = require("discord.js");
 
-  for (const item of SHOP_ITEMS) {
+  const embed = new EmbedBuilder()
+    .setColor(0xFEE75C)
+    .setTitle("🛒 Elyx GCube Shop")
+    .setDescription(
+      "Purchase collectibles using your GC balance.\n" +
+      "Use `/gcube buy` to choose an item."
+    )
+    .setFooter({ text: "Elyx Trading • GCube Party" })
+    .setTimestamp();
+
+  for (const item of GCUBE_SHOP_ITEMS) {
     embed.addFields({
-      name: `${item.emoji} ${item.name}`,
-      value:
-        `💎 Price: **${item.price.toLocaleString()} GC**\n` +
-        `⭐ Rarity: **${item.rarity}**\n` +
-        `🆔 ID: \`${item.id}\``,
+      name: item.name,
+      value: `Price: **${formatGC(item.price)} GC**\nRarity: **${item.rarity}**`,
       inline: true
     });
   }
@@ -1036,171 +1026,120 @@ async function handleGCubeShop(interaction) {
   });
 }
 
-// BUY COMMAND
 async function handleGCubeBuy(interaction) {
-  const data = loadData();
-
-  if (!data) {
-    return interaction.reply({
-      content: "❌ Data load nahi hua. Admin ko logs check karne bolo.",
-      ephemeral: true
-    });
-  }
-
   const itemId = interaction.options.getString("item", true);
-  const item = SHOP_ITEMS.find(entry => entry.id === itemId);
+  const item = GCUBE_SHOP_ITEMS.find(entry => entry.id === itemId);
 
   if (!item) {
     return interaction.reply({
-      content: "❌ Ye item shop mein available nahi hai.",
+      content: "❌ This item doesn't exist in the shop.",
       ephemeral: true
     });
   }
 
-  const user = getUser(data, interaction.user.id);
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
 
-  // Collectibles can only be owned once.
-  if (
-    item.type === "collectible" &&
-    user.collection.some(owned => owned.id === item.id)
-  ) {
+  if (!Array.isArray(user.collection)) {
+    user.collection = [];
+  }
+
+  if (user.collection.includes(item.id)) {
     return interaction.reply({
-      content: `🎴 Tumhare paas **${item.name}** pehle se hai!`,
+      content: "❌ You already own this item!",
       ephemeral: true
     });
   }
 
-  if (user.balance < item.price) {
+  if ((Number(user.balance) || 0) < item.price) {
     return interaction.reply({
       content:
-        `❌ Tumhare paas enough GC nahi hain!\n` +
-        `💎 Price: **${item.price} GC**\n` +
-        `💰 Tumhara balance: **${user.balance} GC**`,
+        `❌ Not enough GC!\n` +
+        `Item price: **${formatGC(item.price)} GC**\n` +
+        `Your balance: **${formatGC(user.balance)} GC**`,
       ephemeral: true
     });
   }
 
-  // Deduct GC only after validating the purchase.
-  if (!spendGC(user, item.price)) {
+  if (!spendGC(data, user, item.price)) {
     return interaction.reply({
-      content: "❌ Purchase nahi ho saka. Dobara try karo.",
+      content: "❌ Purchase failed. Please try again.",
       ephemeral: true
     });
   }
 
-  // Save every purchase as an inventory entry.
-  user.collection.push({
-    id: item.id,
-    name: item.name,
-    type: item.type,
-    rarity: item.rarity,
-    emoji: item.emoji,
-    paid: item.price,
-    purchasedAt: new Date().toISOString(),
-    level: 1
-  });
-
-  if (!Array.isArray(data.gcubeParty.history)) {
-    data.gcubeParty.history = [];
-  }
+  user.collection.push(item.id);
 
   data.gcubeParty.history.push({
     type: "shop_purchase",
     userId: interaction.user.id,
     itemId: item.id,
-    itemName: item.name,
     amount: item.price,
-    time: new Date().toISOString()
+    timestamp: new Date().toISOString()
   });
 
-  if (!saveData(data)) {
-    return interaction.reply({
-      content: "❌ Purchase save nahi hua. Admin ko logs check karne bolo.",
-      ephemeral: true
-    });
+  if (data.gcubeParty.history.length > 2000) {
+    data.gcubeParty.history = data.gcubeParty.history.slice(-2000);
   }
 
-  const embed = makeEmbed(
-    "Purchase Successful!",
-    `${item.emoji} **${item.name}** successfully khareed liya!\n\n` +
-    `💸 Spent: **${item.price.toLocaleString()} GC**\n` +
-    `💎 Remaining balance: **${user.balance.toLocaleString()} GC**\n` +
-    `⭐ Rarity: **${item.rarity}**\n\n` +
-    "🎴 Item tumhari collection mein save ho gaya!"
-  );
-
-  embed.setThumbnail(
-    interaction.user.displayAvatarURL({ size: 256 })
-  );
+  saveGCubeData(data);
 
   return interaction.reply({
-    embeds: [embed],
+    content:
+      `✅ Purchase successful!\n\n` +
+      `Item: **${item.name}**\n` +
+      `Rarity: **${item.rarity}**\n` +
+      `Spent: **${formatGC(item.price)} GC**\n` +
+      `Remaining balance: **${formatGC(user.balance)} GC**`,
     ephemeral: true
   });
 }
 
-// EXPORT COMMANDS
-module.exports.gcubeShopCommand = gcubeShopCommand;
-module.exports.gcubeBuyCommand = gcubeBuyCommand;
-module.exports.handleGCubeShop = handleGCubeShop;
-module.exports.handleGCubeBuy = handleGCubeBuy;
-// ===============================
+registerGCubeSubcommand("shop", handleGCubeShop);
+registerGCubeSubcommand("buy", handleGCubeBuy);
+// ==================================================
 // GCUBE PARTY — PART 6
-// COLLECTION + PROFILE
-// ===============================
+// COLLECTION SYSTEM
+// ==================================================
 
-const gcubeCollectionCommand = new SlashCommandBuilder()
-  .setName("gcube-collection")
-  .setDescription("View your GCube collectible collection");
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("collection")
+    .setDescription("View your GCube item collection")
+);
 
-const gcubeProfileCommand = new SlashCommandBuilder()
-  .setName("gcube-profile")
-  .setDescription("View a player's GCube profile")
-  .addUserOption(option =>
-    option
-      .setName("user")
-      .setDescription("Player whose profile you want to view")
-      .setRequired(false)
-  );
+async function handleGCubeCollection(interaction) {
+  const { EmbedBuilder } = require("discord.js");
 
-function handleGCubeCollection(interaction) {
-  const data = loadData();
-  const user = getUser(data, interaction.user.id);
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
 
-  const items = user.collection || [];
+  const collection = Array.isArray(user.collection)
+    ? user.collection
+    : [];
 
-  const embed = makeEmbed(
-    "🎒 GCube Collection",
-    `**${interaction.user.username}**'s collectibles\n\n` +
-    `🃏 Total items: **${items.length}**\n` +
-    `💰 GC Balance: **${user.balance} GC**`
-  );
+  const ownedItems = collection
+    .map(itemId => GCUBE_SHOP_ITEMS.find(item => item.id === itemId))
+    .filter(Boolean);
 
-  if (items.length === 0) {
-    embed.addFields({
-      name: "Empty Collection",
-      value: "You have no collectibles yet. Use `/gcube-shop` to browse items."
-    });
-  } else {
-    const display = items.slice(0, 20).map((item, index) => {
-      const level = item.level || 1;
-      const rarity = item.rarity || "Common";
-
-      return `**${index + 1}.** ${item.emoji || "🃏"} **${item.name}**\n` +
-        `└ Rarity: ${rarity} • Level: ${level} • Paid: ${item.paid || 0} GC`;
-    });
-
-    embed.addFields({
-      name: "Your Items",
-      value: display.join("\n\n").slice(0, 1024)
-    });
-
-    if (items.length > 20) {
-      embed.setFooter({
-        text: `Showing first 20 of ${items.length} items`
-      });
-    }
-  }
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle(`🎒 ${interaction.user.username}'s Collection`)
+    .setThumbnail(interaction.user.displayAvatarURL())
+    .setDescription(
+      ownedItems.length
+        ? ownedItems.map((item, index) =>
+            `**${index + 1}. ${item.name}**\n` +
+            `Rarity: ${item.rarity} • Price: ${formatGC(item.price)} GC`
+          ).join("\n\n")
+        : "Your collection is empty!\nUse `/gcube shop` to browse items."
+    )
+    .addFields({
+      name: "📦 Total Items",
+      value: `**${ownedItems.length}**`,
+      inline: true
+    })
+    .setFooter({ text: "Elyx Trading • GCube Party" })
+    .setTimestamp();
 
   return interaction.reply({
     embeds: [embed],
@@ -1208,57 +1147,135 @@ function handleGCubeCollection(interaction) {
   });
 }
 
-function handleGCubeProfile(interaction) {
-  const data = loadData();
 
-  const target =
-    interaction.options.getUser("user") || interaction.user;
+registerGCubeSubcommand("collection", handleGCubeCollection);
+// ==================================================
+// GCUBE PARTY — PART 7
+// USER PROFILE SYSTEM
+// ==================================================
 
-  const user = getUser(data, target.id);
-  const items = user.collection || [];
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("profile")
+    .setDescription("View your GCube Party profile")
+);
 
-  const rarestItem = items.reduce((best, item) => {
-    const rarityScore = {
-      Common: 1,
-      Uncommon: 2,
-      Rare: 3,
-      Epic: 4,
-      Legendary: 5,
-      Mythic: 6
-    };
+async function handleGCubeProfile(interaction) {
+  const { EmbedBuilder } = require("discord.js");
 
-    const currentScore = rarityScore[item.rarity] || 1;
-    const bestScore = best ? (rarityScore[best.rarity] || 1) : 0;
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
 
-    return currentScore > bestScore ? item : best;
-  }, null);
+  const collection = Array.isArray(user.collection)
+    ? user.collection
+    : [];
 
-  const embed = makeEmbed(
-    `👤 ${target.username}'s GCube Profile`,
-    `**💰 Balance:** ${user.balance} GC\n` +
-    `🃏 **Collection:** ${items.length} items\n` +
-    `📈 **Total earned:** ${user.totalEarned || 0} GC\n` +
-    `📉 **Total spent:** ${user.totalSpent || 0} GC\n` +
-    `🏆 **Rarest item:** ${rarestItem ? rarestItem.name : "None yet"}`
-  );
+  const questProgress = getGCubeQuestState(user);
 
-  embed.setThumbnail(target.displayAvatarURL({ size: 256 }));
+  const inviteStats = user.inviteStats || {
+    total: 0,
+    rewarded: 0,
+    invitedUsers: []
+  };
 
-  if (user.equippedFrame) {
-    embed.addFields({
-      name: "🖼️ Equipped Frame",
-      value: String(user.equippedFrame),
-      inline: true
-    });
-  }
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle(`👤 ${interaction.user.username}'s GCube Profile`)
+    .setThumbnail(interaction.user.displayAvatarURL())
+    .setDescription(
+      "Welcome to your **Elyx GCube Party profile!**"
+    )
+    .addFields(
+      {
+        name: "💰 Wallet",
+        value:
+          `Balance: **${formatGC(user.balance)} GC**\n` +
+          `Total Earned: **${formatGC(user.totalEarned)} GC**\n` +
+          `Total Spent: **${formatGC(user.totalSpent)} GC**`,
+        inline: false
+      },
+      {
+        name: "🎒 Collection",
+        value: `**${collection.length}** items owned`,
+        inline: true
+      },
+      {
+        name: "📜 Daily Quests",
+        value:
+          `Messages Today: **${questProgress.messages}**\n` +
+          `Quests Claimed: **${questProgress.claimed.length}/${GCUBE_QUESTS.length}**`,
+        inline: true
+      },
+      {
+        name: "🎟️ Invites",
+        value:
+          `Tracked: **${inviteStats.total || 0}**\n` +
+          `Rewards Earned: **${formatGC(inviteStats.rewarded || 0)} GC**`,
+        inline: true
+      },
+      {
+        name: "📅 Member Since",
+        value: `<t:${Math.floor(new Date(user.createdAt).getTime() / 1000)}:D>`,
+        inline: true
+      }
+    )
+    .setFooter({ text: "Elyx Trading • GCube Party" })
+    .setTimestamp();
 
-  if (user.equippedBackground) {
-    embed.addFields({
-      name: "🌄 Equipped Background",
-      value: String(user.equippedBackground),
-      inline: true
-    });
-  }
+  saveGCubeData(data);
+
+  return interaction.reply({
+    embeds: [embed],
+    ephemeral: true
+  });
+}
+
+registerGCubeSubcommand("profile", handleGCubeProfile);
+// ==================================================
+// GCUBE PARTY — PART 8
+// LEADERBOARD SYSTEM
+// ==================================================
+
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("top")
+    .setDescription("View the richest GCube players")
+);
+
+async function handleGCubeTop(interaction) {
+  const { EmbedBuilder } = require("discord.js");
+
+  const data = loadGCubeData();
+  const users = data.gcubeParty.users || {};
+
+  const leaderboard = Object.entries(users)
+    .map(([userId, user]) => ({
+      userId,
+      balance: Math.max(0, Number(user.balance) || 0),
+      totalEarned: Math.max(0, Number(user.totalEarned) || 0)
+    }))
+    .sort((a, b) => b.balance - a.balance)
+    .slice(0, 10);
+
+  const medals = ["🥇", "🥈", "🥉"];
+
+  const description = leaderboard.length
+    ? leaderboard.map((player, index) => {
+        const rank = medals[index] || `**${index + 1}.**`;
+
+        return (
+          `${rank} <@${player.userId}>\n` +
+          `┗ 💰 **${formatGC(player.balance)} GC**`
+        );
+      }).join("\n\n")
+    : "No GCube players yet. Start earning GC to appear here!";
+
+  const embed = new EmbedBuilder()
+    .setColor(0xFEE75C)
+    .setTitle("🏆 GCube Rich List")
+    .setDescription(description)
+    .setFooter({
+      text: "Elyx Trading • Top 10 players by current balance"
+    })
+    .setTimestamp();
 
   return interaction.reply({
     embeds: [embed],
@@ -1266,445 +1283,431 @@ function handleGCubeProfile(interaction) {
   });
 }
 
-module.exports.gcubeCollectionCommand = gcubeCollectionCommand;
-module.exports.gcubeProfileCommand = gcubeProfileCommand;
-module.exports.handleGCubeCollection = handleGCubeCollection;
-module.exports.handleGCubeProfile = handleGCubeProfile;
-// ===============================
-// GCUBE PARTY — PART 7
-// SHOWCASE + LEADERBOARD
-// ===============================
+registerGCubeSubcommand("top", handleGCubeTop);
+// ==================================================
+// GCUBE PARTY — PART 9
+// PROFILE SHOWCASE
+// ==================================================
 
-const gcubeShowcaseCommand = new SlashCommandBuilder()
-  .setName("gcube-showcase")
-  .setDescription("Show your favorite collectible")
-  .addStringOption(option =>
-    option
-      .setName("item")
-      .setDescription("Exact name of the item you own")
-      .setRequired(true)
-  );
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("showcase")
+    .setDescription("Show your GCube collection and equipped cosmetics")
+);
 
-const gcubeTopCommand = new SlashCommandBuilder()
-  .setName("gcube-top")
-  .setDescription("View the GCube Party richest players");
+async function handleGCubeShowcase(interaction) {
+  const { EmbedBuilder } = require("discord.js");
 
-function handleGCubeShowcase(interaction) {
-  const data = loadData();
-  const user = getUser(data, interaction.user.id);
-  const requestedName = interaction.options.getString("item").trim();
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
 
-  const item = (user.collection || []).find(
-    entry => entry.name.toLowerCase() === requestedName.toLowerCase()
-  );
+  const collection = Array.isArray(user.collection)
+    ? user.collection
+    : [];
 
-  if (!item) {
-    return interaction.reply({
-      content: "❌ You don't own that item. Check `/gcube-collection` for your items.",
-      ephemeral: true
-    });
-  }
-
-  user.favoriteShowcase = item.id;
-  saveData(data);
-
-  const embed = makeEmbed(
-    "✨ GCube Showcase",
-    `**${interaction.user.username}** is showing off:\n\n` +
-    `${item.emoji || "🃏"} **${item.name}**\n` +
-    `💎 Rarity: **${item.rarity || "Common"}**\n` +
-    `⭐ Level: **${item.level || 1}**\n` +
-    `💰 Original price: **${item.paid || 0} GC**`
-  );
-
-  embed.setThumbnail(interaction.user.displayAvatarURL({ size: 256 }));
-
-  return interaction.reply({ embeds: [embed] });
-}
-
-function handleGCubeTop(interaction) {
-  const data = loadData();
-  const users = data.gcubeParty?.users || {};
-
-  const ranking = Object.entries(users)
-    .map(([userId, user]) => ({
-      userId,
-      balance: Number(user.balance) || 0,
-      totalEarned: Number(user.totalEarned) || 0,
-      items: Array.isArray(user.collection) ? user.collection.length : 0
-    }))
-    .sort((a, b) => b.balance - a.balance)
-    .slice(0, 10);
-
-  const embed = makeEmbed(
-    "🏆 GCube Party Leaderboard",
-    "Top 10 players ranked by current GC balance."
-  );
-
-  if (ranking.length === 0) {
-    embed.addFields({
-      name: "No Players Yet",
-      value: "Play GCube Party to appear on the leaderboard!"
-    });
-  } else {
-    embed.addFields({
-      name: "💰 Richest Players",
-      value: ranking.map((player, index) =>
-        `**${index + 1}.** <@${player.userId}> — **${player.balance} GC**`
-      ).join("\n")
-    });
-  }
-
-  embed.setFooter({ text: "GC balances are saved and do not reset daily." });
-
-  return interaction.reply({ embeds: [embed] });
-}
-
-module.exports.gcubeShowcaseCommand = gcubeShowcaseCommand;
-module.exports.gcubeTopCommand = gcubeTopCommand;
-module.exports.handleGCubeShowcase = handleGCubeShowcase;
-module.exports.handleGCubeTop = handleGCubeTop;
-
-// ===============================
-// GCUBE PARTY — PART 8
-// COLLECTIBLE UPGRADE SYSTEM
-// ===============================
-
-const gcubeUpgradeCommand = new SlashCommandBuilder()
-  .setName("gcube-upgrade")
-  .setDescription("Upgrade a collectible you own")
-  .addStringOption(option =>
-    option
-      .setName("item")
-      .setDescription("Name of the collectible to upgrade")
-      .setRequired(true)
-  );
-
-const GCUBE_UPGRADE_PATHS = {
-  "Shadow Wolf": {
-    next: "Dark Shadow Wolf",
-    material: "Upgrade Stone",
-    amount: 1,
-    cost: 100,
-    rarity: "Rare",
-    emoji: "🐺"
-  },
-  "Dark Shadow Wolf": {
-    next: "Shadow King",
-    material: "Diamond Core",
-    amount: 1,
-    cost: 250,
-    rarity: "Epic",
-    emoji: "👑"
-  },
-  "Flame Dragon": {
-    next: "Inferno Dragon",
-    material: "Flame Essence",
-    amount: 1,
-    cost: 300,
-    rarity: "Epic",
-    emoji: "🐉"
-  },
-  "Royal King": {
-    next: "Cosmic King",
-    material: "Cosmic Crystal",
-    amount: 1,
-    cost: 500,
-    rarity: "Legendary",
-    emoji: "🌌"
-  },
-  "Cosmic Phantom": {
-    next: "Eternal Phantom",
-    material: "Elyx Core",
-    amount: 1,
-    cost: 750,
-    rarity: "Mythic",
-    emoji: "👻"
-  }
-};
-
-function handleGCubeUpgrade(interaction) {
-  const data = loadData();
-  const user = getUser(data, interaction.user.id);
-
-  const requestedName = interaction.options
-    .getString("item")
-    .trim();
-
-  const inventory = user.collection || [];
-
-  const itemIndex = inventory.findIndex(item =>
-    item.name.toLowerCase() === requestedName.toLowerCase()
-  );
-
-  if (itemIndex === -1) {
-    return interaction.reply({
-      content: "❌ You don't own that collectible. Check `/gcube-collection`.",
-      ephemeral: true
-    });
-  }
-
-  const item = inventory[itemIndex];
-  const upgrade = GCUBE_UPGRADE_PATHS[item.name];
-
-  if (!upgrade) {
-    return interaction.reply({
-      content: "❌ This collectible has no upgrade path yet.",
-      ephemeral: true
-    });
-  }
-
-  const materials = user.materials || {};
-  const ownedMaterials = Number(materials[upgrade.material]) || 0;
-
-  if (ownedMaterials < upgrade.amount) {
-    return interaction.reply({
-      content: `❌ You need ${upgrade.amount} ${upgrade.material} to upgrade this collectible.`,
-      ephemeral: true
-    });
-  }
-
-  if ((Number(user.balance) || 0) < upgrade.cost) {
-    return interaction.reply({
-      content: `❌ You need ${upgrade.cost} GC to upgrade this collectible.`,
-      ephemeral: true
-    });
-  }
-
-  if (!spendGC(data, user, upgrade.cost)) {
-    return interaction.reply({
-      content: "❌ Upgrade failed: insufficient GC.",
-      ephemeral: true
-    });
-  }
-
-  materials[upgrade.material] = ownedMaterials - upgrade.amount;
-  user.materials = materials;
-
-  inventory[itemIndex] = {
-    ...item,
-    name: upgrade.next,
-    rarity: upgrade.rarity,
-    emoji: upgrade.emoji
+  const equipped = user.equipped || {
+    frame: null,
+    background: null,
+    nameplate: null
   };
 
-  user.collection = inventory;
+  const ownedItems = collection
+    .map(id => GCUBE_SHOP_ITEMS.find(item => item.id === id))
+    .filter(Boolean);
 
-  if (typeof saveData === "function") {
-    saveData(data);
-  }
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle(`✨ ${interaction.user.username}'s Showcase`)
+    .setThumbnail(interaction.user.displayAvatarURL())
+    .setDescription(
+      `**GC Balance:** ${formatGC(user.balance)} GC\n` +
+      `**Items Collected:** ${ownedItems.length}`
+    )
+    .addFields(
+      {
+        name: "🖼️ Equipped Frame",
+        value: equipped.frame || "None equipped",
+        inline: true
+      },
+      {
+        name: "🌌 Equipped Background",
+        value: equipped.background || "None equipped",
+        inline: true
+      },
+      {
+        name: "🏷️ Equipped Nameplate",
+        value: equipped.nameplate || "None equipped",
+        inline: true
+      },
+      {
+        name: "🎒 Featured Collection",
+        value: ownedItems.length
+          ? ownedItems.slice(0, 10)
+              .map(item => `${item.name} — ${item.rarity}`)
+              .join("\n")
+          : "No items collected yet. Visit `/gcube shop`!",
+        inline: false
+      }
+    )
+    .setFooter({ text: "Elyx Trading • GCube Party" })
+    .setTimestamp();
 
   return interaction.reply({
-    content: `✅ Upgrade successful!\n${item.name} ➜ ${upgrade.emoji} **${upgrade.next}**\nCost: **${upgrade.cost} GC**`,
+    embeds: [embed],
+    ephemeral: false
+  });
+}
+
+registerGCubeSubcommand("showcase", handleGCubeShowcase);
+// ==================================================
+// GCUBE PARTY — PART 10
+// TRANSACTION HISTORY
+// ==================================================
+
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("history")
+    .setDescription("View your recent GCube transactions")
+);
+
+async function handleGCubeHistory(interaction) {
+  const { EmbedBuilder } = require("discord.js");
+
+  const data = loadGCubeData();
+  const history = Array.isArray(data.gcubeParty.history)
+    ? data.gcubeParty.history
+    : [];
+
+  const userHistory = history
+    .filter(entry => entry.userId === interaction.user.id)
+    .slice(-10)
+    .reverse();
+
+  const description = userHistory.length
+    ? userHistory.map((entry, index) => {
+        const amount = formatGC(entry.amount || 0);
+        const date = Math.floor(
+          new Date(entry.timestamp).getTime() / 1000
+        );
+
+        let label = entry.type || "transaction";
+
+        if (label === "daily_reward") label = "Daily Reward";
+        if (label === "invite_reward") label = "Invite Reward";
+        if (label === "quest_reward") label = "Quest Reward";
+        if (label === "shop_purchase") label = "Shop Purchase";
+
+        const sign = entry.type === "shop_purchase" ? "−" : "+";
+
+        return (
+          `**${index + 1}. ${label}**\n` +
+          `Amount: **${sign}${amount} GC**\n` +
+          `${Number.isFinite(date) ? `<t:${date}:R>` : "Date unavailable"}`
+        );
+      }).join("\n\n")
+    : "No transactions yet. Start earning or spending GC!";
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle("📜 Your GCube History")
+    .setDescription(description)
+    .setFooter({ text: "Elyx Trading • Last 10 transactions" })
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed],
     ephemeral: true
   });
 }
 
-module.exports.gcubeUpgradeCommand = gcubeUpgradeCommand;
-module.exports.handleGCubeUpgrade = handleGCubeUpgrade;
+registerGCubeSubcommand("history", handleGCubeHistory);
+// ==================================================
+// GCUBE PARTY — PART 11
+// GC TRANSFER SYSTEM
+// ==================================================
 
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("pay")
+    .setDescription("Send GC to another server member")
+    .addUserOption(option =>
+      option.setName("user")
+        .setDescription("Member receiving the GC")
+        .setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option.setName("amount")
+        .setDescription("Amount of GC to send")
+        .setMinValue(1)
+        .setRequired(true)
+    )
+);
 
+async function handleGCubePay(interaction) {
+  const recipient = interaction.options.getUser("user", true);
+  const amount = interaction.options.getInteger("amount", true);
 
-
-// ========================================
-// GCUBE PARTY — PART 9
-// GC TRANSFER + ITEM SELLING
-// ========================================
-
-// TRANSFER GC
-const gcubePayCommand = new SlashCommandBuilder()
-  .setName("gcube-pay")
-  .setDescription("Send GC to another player")
-  .addUserOption(option =>
-    option.setName("user")
-      .setDescription("Player receiving GC")
-      .setRequired(true)
-  )
-  .addIntegerOption(option =>
-    option.setName("amount")
-      .setDescription("Amount of GC to send")
-      .setMinValue(1)
-      .setRequired(true)
-  );
-
-// SELL A COLLECTIBLE
-const gcubeSellCommand = new SlashCommandBuilder()
-  .setName("gcube-sell")
-  .setDescription("Sell one of your collectibles")
-  .addStringOption(option =>
-    option.setName("item")
-      .setDescription("Exact name of the collectible")
-      .setRequired(true)
-  );
-
-// Send GC safely
-function handleGCubePay(interaction) {
-  const data = loadData();
-
-  const senderId = interaction.user.id;
-  const receiver = interaction.options.getUser("user");
-  const amount = interaction.options.getInteger("amount");
-
-  if (receiver.bot || receiver.id === senderId) {
+  if (recipient.bot) {
     return interaction.reply({
-      content: "❌ You can't send GC to yourself or a bot.",
+      content: "❌ You cannot send GC to a bot.",
       ephemeral: true
     });
   }
 
-  if (!Number.isSafeInteger(amount) || amount < 1) {
+  if (recipient.id === interaction.user.id) {
     return interaction.reply({
-      content: "❌ Enter a valid positive amount.",
+      content: "❌ You cannot send GC to yourself.",
       ephemeral: true
     });
   }
 
-  const sender = getUser(data, senderId);
-  const recipient = getUser(data, receiver.id);
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    return interaction.reply({
+      content: "❌ Enter a valid positive GC amount.",
+      ephemeral: true
+    });
+  }
+
+  const data = loadGCubeData();
+
+  const sender = getGCubeUser(data, interaction.user.id);
+  const receiver = getGCubeUser(data, recipient.id);
 
   if ((Number(sender.balance) || 0) < amount) {
     return interaction.reply({
-      content: "❌ You don't have enough GC.",
+      content:
+        `❌ Insufficient balance!\n` +
+        `Your balance: **${formatGC(sender.balance)} GC**`,
+      ephemeral: true
+    });
+  }
+
+  if (
+    (Number(receiver.balance) || 0) + amount >
+    Number.MAX_SAFE_INTEGER
+  ) {
+    return interaction.reply({
+      content: "❌ The recipient's balance limit would be exceeded.",
       ephemeral: true
     });
   }
 
   if (!spendGC(data, sender, amount)) {
     return interaction.reply({
-      content: "❌ Transfer failed: insufficient balance.",
+      content: "❌ Transfer failed. Please try again.",
       ephemeral: true
     });
   }
 
-  addGC(data, recipient, amount);
-  saveData();
+  receiver.balance = (Number(receiver.balance) || 0) + amount;
+  receiver.totalEarned = (Number(receiver.totalEarned) || 0) + amount;
 
-  return interaction.reply({
-    content: `💸 ${interaction.user} sent **${amount} GC** to ${receiver}.`,
-    ephemeral: false
+  data.gcubeParty.history.push({
+    type: "transfer_sent",
+    userId: interaction.user.id,
+    recipientId: recipient.id,
+    amount,
+    timestamp: new Date().toISOString()
   });
-}
 
-// Sell a collectible
-function handleGCubeSell(interaction) {
-  const data = loadData();
-  const user = getUser(data, interaction.user.id);
+  data.gcubeParty.history.push({
+    type: "transfer_received",
+    userId: recipient.id,
+    senderId: interaction.user.id,
+    amount,
+    timestamp: new Date().toISOString()
+  });
 
-  const requestedName = interaction.options
-    .getString("item")
-    .trim();
-
-  const inventory = user.collection || [];
-
-  const itemIndex = inventory.findIndex(item =>
-    item.name.toLowerCase() === requestedName.toLowerCase()
-  );
-
-  if (itemIndex === -1) {
-    return interaction.reply({
-      content: "❌ You don't own that collectible.",
-      ephemeral: true
-    });
+  if (data.gcubeParty.history.length > 2000) {
+    data.gcubeParty.history =
+      data.gcubeParty.history.slice(-2000);
   }
 
-  const item = inventory[itemIndex];
-  const sellValue = Math.max(
-    1,
-    Math.floor(Number(item.sellValue) || 50)
-  );
-
-  inventory.splice(itemIndex, 1);
-  user.collection = inventory;
-
-  addGC(data, user, sellValue);
-  saveData();
+  saveGCubeData(data);
 
   return interaction.reply({
-    content: `💰 Sold **${item.name}** for **${sellValue} GC**.`,
+    content:
+      `✅ GC transfer successful!\n\n` +
+      `👤 Sent to: ${recipient}\n` +
+      `💸 Amount: **${formatGC(amount)} GC**\n` +
+      `💰 Your balance: **${formatGC(sender.balance)} GC**`,
     ephemeral: false
   });
 }
 
-module.exports.gcubePayCommand = gcubePayCommand;
-module.exports.gcubeSellCommand = gcubeSellCommand;
-module.exports.handleGCubePay = handleGCubePay;
-module.exports.handleGCubeSell = handleGCubeSell;
+registerGCubeSubcommand("pay", handleGCubePay);
+// ==================================================
+// GCUBE PARTY — PART 12
+// EQUIP / UNEQUIP COSMETICS
+// ==================================================
 
+const GCUBE_EQUIP_ITEMS = [
+  { id: "fire_frame", name: "🔥 Fire Frame", slot: "frame" },
+  { id: "ice_frame", name: "❄️ Ice Frame", slot: "frame" },
+  { id: "neon_frame", name: "🌈 Neon Frame", slot: "frame" },
+  { id: "galaxy_bg", name: "🌌 Galaxy Background", slot: "background" },
+  { id: "sunset_bg", name: "🌅 Sunset Background", slot: "background" },
+  { id: "elite_plate", name: "⚡ Elite Nameplate", slot: "nameplate" }
+];
 
-  
-// ========================================
-// GCUBE PARTY — PART 10
-// TRANSACTION HISTORY
-// ========================================
-
-const gcubeHistoryCommand = new SlashCommandBuilder()
-  .setName("gcube-history")
-  .setDescription("View your recent GCube transactions");
-
-function handleGCubeHistory(interaction) {
-  const data = loadData();
-  const userId = interaction.user.id;
-
-  const history = Array.isArray(data.gcubeParty?.history)
-    ? data.gcubeParty.history
-    : [];
-
-  const records = history
-    .filter(entry =>
-      entry.userId === userId ||
-      (
-        entry.type === "transfer_received" &&
-        entry.userId === userId
-      )
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("equip")
+    .setDescription("Equip a cosmetic you own")
+    .addStringOption(option =>
+      option.setName("item")
+        .setDescription("Choose a cosmetic")
+        .setRequired(true)
+        .addChoices(
+          ...GCUBE_EQUIP_ITEMS.map(item => ({
+            name: item.name,
+            value: item.id
+          }))
+        )
     )
-    .slice(-10)
-    .reverse();
+);
 
-  const embed = makeEmbed(
-    "📜 GCube Transaction History",
-    `Recent transactions for **${interaction.user.username}**`
-  );
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("unequip")
+    .setDescription("Remove an equipped cosmetic")
+    .addStringOption(option =>
+      option.setName("slot")
+        .setDescription("Choose the cosmetic slot")
+        .setRequired(true)
+        .addChoices(
+          { name: "Frame", value: "frame" },
+          { name: "Background", value: "background" },
+          { name: "Nameplate", value: "nameplate" }
+        )
+    )
+);
 
-  if (records.length === 0) {
-    embed.addFields({
-      name: "No Transactions",
-      value: "Your GCube transactions will appear here."
-    });
-  } else {
-    const lines = records.map((entry, index) => {
-      const date = entry.date
-        ? new Date(entry.date).toLocaleDateString("en-IN", {
-            timeZone: "Asia/Kolkata"
-          })
-        : "Unknown date";
+async function handleGCubeEquip(interaction) {
+  const itemId = interaction.options.getString("item", true);
+  const item = GCUBE_EQUIP_ITEMS.find(entry => entry.id === itemId);
 
-      let description = entry.type || "Transaction";
-
-      if (entry.type === "purchase") {
-        description = `🛒 Purchased ${entry.item || "item"}`;
-      } else if (entry.type === "upgrade") {
-        description = `⬆️ Upgraded ${entry.item || "item"}`;
-      } else if (entry.type === "item_sold") {
-        description = `💰 Sold ${entry.item || "item"}`;
-      } else if (entry.type === "transfer_sent") {
-        description = `📤 Sent GC to <@${entry.targetId}>`;
-      } else if (entry.type === "transfer_received") {
-        description = `📥 Received GC from <@${entry.targetId}>`;
-      } else if (entry.type === "daily_reward") {
-        description = "🎁 Claimed daily reward";
-      }
-
-      const amount = Number(entry.amount ?? entry.cost ?? 0);
-
-      return `**${index + 1}.** ${description}\n` +
-        `└ GC: **${amount}** • ${date}`;
-    });
-
-    embed.addFields({
-      name: "Latest Transactions",
-      value: lines.join("\n\n").slice(0, 1024)
+  if (!item) {
+    return interaction.reply({
+      content: "❌ This cosmetic is unavailable.",
+      ephemeral: true
     });
   }
+
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+
+  if (!user.collection.includes(item.id)) {
+    return interaction.reply({
+      content: "❌ You don't own this cosmetic. Buy it from `/gcube shop` first.",
+      ephemeral: true
+    });
+  }
+
+  if (!user.equipped) {
+    user.equipped = {
+      frame: null,
+      background: null,
+      nameplate: null
+    };
+  }
+
+  user.equipped[item.slot] = item.id;
+  saveGCubeData(data);
+
+  return interaction.reply({
+    content: `✅ Equipped **${item.name}** successfully!`,
+    ephemeral: true
+  });
+}
+
+async function handleGCubeUnequip(interaction) {
+  const slot = interaction.options.getString("slot", true);
+
+  if (!["frame", "background", "nameplate"].includes(slot)) {
+    return interaction.reply({
+      content: "❌ Invalid cosmetic slot.",
+      ephemeral: true
+    });
+  }
+
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+
+  if (!user.equipped) {
+    user.equipped = {
+      frame: null,
+      background: null,
+      nameplate: null
+    };
+  }
+
+  if (!user.equipped[slot]) {
+    return interaction.reply({
+      content: `❌ You don't have anything equipped in the ${slot} slot.`,
+      ephemeral: true
+    });
+  }
+
+  user.equipped[slot] = null;
+  saveGCubeData(data);
+
+  return interaction.reply({
+    content: `✅ Your ${slot} has been unequipped.`,
+    ephemeral: true
+  });
+}
+
+registerGCubeSubcommand("equip", handleGCubeEquip);
+registerGCubeSubcommand("unequip", handleGCubeUnequip);
+// ==================================================
+// GCUBE PARTY — PART 13
+// MATERIALS + ITEM UPGRADES
+// ==================================================
+
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("materials")
+    .setDescription("View your GCube materials")
+);
+
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("upgrade")
+    .setDescription("Upgrade a collectible you own")
+    .addStringOption(option =>
+      option.setName("item")
+        .setDescription("Choose an item from your collection")
+        .setRequired(true)
+        .addChoices(
+          ...GCUBE_SHOP_ITEMS.map(item => ({
+            name: item.name,
+            value: item.id
+          }))
+        )
+    )
+);
+
+async function handleGCubeMaterials(interaction) {
+  const { EmbedBuilder } = require("discord.js");
+
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+
+  if (!user.materials || typeof user.materials !== "object") {
+    user.materials = {};
+  }
+
+  const materialEntries = Object.entries(user.materials)
+    .filter(([, amount]) => Number(amount) > 0);
+
+  const description = materialEntries.length
+    ? materialEntries.map(([name, amount]) =>
+        `🧱 **${name}** — ${formatGC(amount)}`
+      ).join("\n")
+    : "Your materials inventory is empty.\nMore material-earning activities can be added later.";
+
+  const embed = new EmbedBuilder()
+    .setColor(0x57F287)
+    .setTitle("🧱 GCube Materials")
+    .setDescription(description)
+    .setFooter({ text: "Elyx Trading • GCube Party" })
+    .setTimestamp();
+
+  saveGCubeData(data);
 
   return interaction.reply({
     embeds: [embed],
@@ -1712,5 +1715,186 @@ function handleGCubeHistory(interaction) {
   });
 }
 
-module.exports.gcubeHistoryCommand = gcubeHistoryCommand;
-module.exports.handleGCubeHistory = handleGCubeHistory;
+async function handleGCubeUpgrade(interaction) {
+  const itemId = interaction.options.getString("item", true);
+  const item = GCUBE_SHOP_ITEMS.find(entry => entry.id === itemId);
+
+  if (!item) {
+    return interaction.reply({
+      content: "❌ This item is unavailable.",
+      ephemeral: true
+    });
+  }
+
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+
+  if (!user.collection.includes(itemId)) {
+    return interaction.reply({
+      content: "❌ You must own this item before upgrading it.",
+      ephemeral: true
+    });
+  }
+
+  if (!user.itemLevels || typeof user.itemLevels !== "object") {
+    user.itemLevels = {};
+  }
+
+  const currentLevel = Math.max(
+    0,
+    Math.floor(Number(user.itemLevels[itemId]) || 0)
+  );
+
+  const maxLevel = 5;
+
+  if (currentLevel >= maxLevel) {
+    return interaction.reply({
+      content: `🏆 **${item.name}** is already at maximum level ${maxLevel}.`,
+      ephemeral: true
+    });
+  }
+
+  const nextLevel = currentLevel + 1;
+  const price = nextLevel * 1000;
+
+  if ((Number(user.balance) || 0) < price) {
+    return interaction.reply({
+      content:
+        `❌ Not enough GC to upgrade **${item.name}**.\n` +
+        `Upgrade cost: **${formatGC(price)} GC**\n` +
+        `Your balance: **${formatGC(user.balance)} GC**`,
+      ephemeral: true
+    });
+  }
+
+  if (!spendGC(data, user, price)) {
+    return interaction.reply({
+      content: "❌ Upgrade failed. Please try again.",
+      ephemeral: true
+    });
+  }
+
+  user.itemLevels[itemId] = nextLevel;
+
+  data.gcubeParty.history.push({
+    type: "item_upgrade",
+    userId: interaction.user.id,
+    itemId,
+    level: nextLevel,
+    amount: price,
+    timestamp: new Date().toISOString()
+  });
+
+  if (data.gcubeParty.history.length > 2000) {
+    data.gcubeParty.history = data.gcubeParty.history.slice(-2000);
+  }
+
+  saveGCubeData(data);
+
+  return interaction.reply({
+    content:
+      `⬆️ **Upgrade successful!**\n\n` +
+      `Item: **${item.name}**\n` +
+      `Level: **${currentLevel} → ${nextLevel}**\n` +
+      `Cost: **${formatGC(price)} GC**\n` +
+      `Remaining balance: **${formatGC(user.balance)} GC**`,
+    ephemeral: true
+  });
+}
+
+registerGCubeSubcommand("materials", handleGCubeMaterials);
+registerGCubeSubcommand("upgrade", handleGCubeUpgrade);
+// ==================================================
+// GCUBE PARTY — PART 14
+// SELL COLLECTIBLES
+// ==================================================
+
+gcubeCommand.addSubcommand(sub =>
+  sub.setName("sell")
+    .setDescription("Sell a collectible from your collection")
+    .addStringOption(option =>
+      option.setName("item")
+        .setDescription("Choose an item to sell")
+        .setRequired(true)
+        .addChoices(
+          ...GCUBE_SHOP_ITEMS.map(item => ({
+            name: item.name,
+            value: item.id
+          }))
+        )
+    )
+);
+
+async function handleGCubeSell(interaction) {
+  const itemId = interaction.options.getString("item", true);
+  const item = GCUBE_SHOP_ITEMS.find(entry => entry.id === itemId);
+
+  if (!item) {
+    return interaction.reply({
+      content: "❌ This item is not available.",
+      ephemeral: true
+    });
+  }
+
+  const data = loadGCubeData();
+  const user = getGCubeUser(data, interaction.user.id);
+
+  const itemIndex = user.collection.indexOf(itemId);
+
+  if (itemIndex === -1) {
+    return interaction.reply({
+      content: "❌ You don't own this item.",
+      ephemeral: true
+    });
+  }
+
+  // Sell for 50% of the original shop price.
+  const sellPrice = Math.floor(item.price / 2);
+
+  user.collection.splice(itemIndex, 1);
+
+  // Unequip the item automatically if it is equipped.
+  if (user.equipped) {
+    for (const slot of ["frame", "background", "nameplate"]) {
+      if (user.equipped[slot] === itemId) {
+        user.equipped[slot] = null;
+      }
+    }
+  }
+
+  addGC(data, user, sellPrice);
+
+  data.gcubeParty.history.push({
+    type: "item_sale",
+    userId: interaction.user.id,
+    itemId: item.id,
+    amount: sellPrice,
+    timestamp: new Date().toISOString()
+  });
+
+  if (data.gcubeParty.history.length > 2000) {
+    data.gcubeParty.history = data.gcubeParty.history.slice(-2000);
+  }
+
+  saveGCubeData(data);
+
+  return interaction.reply({
+    content:
+      `✅ **Item sold successfully!**\n\n` +
+      `📦 Item: **${item.name}**\n` +
+      `💰 Received: **${formatGC(sellPrice)} GC**\n` +
+      `👛 New balance: **${formatGC(user.balance)} GC**`,
+    ephemeral: true
+  });
+}
+
+registerGCubeSubcommand("sell", handleGCubeSell);
+// ==================================================
+// GCUBE PARTY — PART 15
+// INVITE TRACKING EXPORTS
+// ==================================================
+
+module.exports.cacheGuildInvites = cacheGuildInvites;
+module.exports.handleGCubeMemberJoin = handleGCubeMemberJoin;
+
+console.log("[GCube] Invite tracking exports registered.");

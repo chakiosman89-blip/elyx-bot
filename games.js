@@ -1503,6 +1503,9 @@ function handleGCubeUpgrade(interaction) {
 module.exports.gcubeUpgradeCommand = gcubeUpgradeCommand;
 module.exports.handleGCubeUpgrade = handleGCubeUpgrade;
 
+
+
+
 // ========================================
 // GCUBE PARTY — PART 9
 // GC TRANSFER + ITEM SELLING
@@ -1549,15 +1552,15 @@ function handleGCubePay(interaction) {
     });
   }
 
-  const sender = getUser(data, senderId);
-  const recipient = getUser(data, receiver.id);
-
   if (!Number.isSafeInteger(amount) || amount < 1) {
     return interaction.reply({
       content: "❌ Enter a valid positive amount.",
       ephemeral: true
     });
   }
+
+  const sender = getUser(data, senderId);
+  const recipient = getUser(data, receiver.id);
 
   if ((Number(sender.balance) || 0) < amount) {
     return interaction.reply({
@@ -1570,125 +1573,19 @@ function handleGCubePay(interaction) {
     return interaction.reply({
       content: "❌ Transfer failed: insufficient balance.",
       ephemeral: true
-
-        // ========================================
-// GCUBE PARTY — PART 9
-// GC TRANSFER + ITEM SELLING
-// ========================================
-
-// TRANSFER GC
-const gcubePayCommand = new SlashCommandBuilder()
-  .setName("gcube-pay")
-  .setDescription("Send GC to another player")
-  .addUserOption(option =>
-    option.setName("user")
-      .setDescription("Player receiving GC")
-      .setRequired(true)
-  )
-  .addIntegerOption(option =>
-    option.setName("amount")
-      .setDescription("Amount of GC to send")
-      .setMinValue(1)
-      .setRequired(true)
-  );
-
-// SELL A COLLECTIBLE
-const gcubeSellCommand = new SlashCommandBuilder()
-  .setName("gcube-sell")
-  .setDescription("Sell one of your collectibles")
-  .addStringOption(option =>
-    option.setName("item")
-      .setDescription("Exact name of the collectible")
-      .setRequired(true)
-  );
-
-// TRANSFER GC SAFELY
-function handleGCubePay(interaction) {
-  const data = loadData();
-
-  const senderId = interaction.user.id;
-  const receiver = interaction.options.getUser("user");
-  const amount = interaction.options.getInteger("amount");
-
-  if (!receiver || receiver.bot || receiver.id === senderId) {
-    return interaction.reply({
-      content: "❌ You can't send GC to yourself or a bot.",
-      ephemeral: true
     });
   }
 
-  if (!Number.isSafeInteger(amount) || amount < 1) {
-    return interaction.reply({
-      content: "❌ Enter a valid positive amount.",
-      ephemeral: true
-    });
-  }
-
-  const sender = getUser(data, senderId);
-  const recipient = getUser(data, receiver.id);
-
-  if ((Number(sender.balance) || 0) < amount) {
-    return interaction.reply({
-      content: "❌ You don't have enough GC.",
-      ephemeral: true
-    });
-  }
-
-  // Deduct GC from sender.
-  if (!spendGC(sender, amount)) {
-    return interaction.reply({
-      content: "❌ Transfer failed: insufficient balance.",
-      ephemeral: true
-    });
-  }
-
-  // Add GC to receiver.
-  addGC(recipient, amount);
-
-  if (!data.gcubeParty) {
-    data.gcubeParty = {
-      users: {},
-      trades: {},
-      inviteTracking: {},
-      history: []
-    };
-  }
-
-  if (!Array.isArray(data.gcubeParty.history)) {
-    data.gcubeParty.history = [];
-  }
-
-  const timestamp = new Date().toISOString();
-
-  data.gcubeParty.history.push({
-    type: "transfer_sent",
-    userId: senderId,
-    targetId: receiver.id,
-    amount,
-    date: timestamp
-  });
-
-  data.gcubeParty.history.push({
-    type: "transfer_received",
-    userId: receiver.id,
-    targetId: senderId,
-    amount,
-    date: timestamp
-  });
-
-  saveData(data);
+  addGC(data, recipient, amount);
+  saveData();
 
   return interaction.reply({
-    content:
-      `✅ <@${senderId}> sent **${amount} GC** to ${receiver}!\n` +
-      `💰 Your remaining balance: **${sender.balance} GC**`,
-    allowedMentions: {
-      users: [senderId, receiver.id]
-    }
+    content: `💸 ${interaction.user} sent **${amount} GC** to ${receiver}.`,
+    ephemeral: false
   });
 }
 
-// SELL COLLECTIBLE FOR 50% OF ITS RECORDED PURCHASE PRICE.
+// Sell a collectible
 function handleGCubeSell(interaction) {
   const data = loadData();
   const user = getUser(data, interaction.user.id);
@@ -1700,66 +1597,41 @@ function handleGCubeSell(interaction) {
   const inventory = user.collection || [];
 
   const itemIndex = inventory.findIndex(item =>
-    item &&
-    typeof item.name === "string" &&
     item.name.toLowerCase() === requestedName.toLowerCase()
   );
 
   if (itemIndex === -1) {
     return interaction.reply({
-      content: "❌ You don't own that item. Check `/gcube-collection`.",
+      content: "❌ You don't own that collectible.",
       ephemeral: true
     });
   }
 
   const item = inventory[itemIndex];
-  const paid = Math.max(0, Number(item.paid) || 0);
-  const sellPrice = Math.floor(paid / 2);
+  const sellValue = Math.max(
+    1,
+    Math.floor(Number(item.sellValue) || 50)
+  );
 
-  // Remove only the item being sold.
   inventory.splice(itemIndex, 1);
+  user.collection = inventory;
 
-  // Give the user their selling payment.
-  if (sellPrice > 0) {
-    addGC(user, sellPrice);
-  }
-
-  if (!data.gcubeParty) {
-    data.gcubeParty = {
-      users: {},
-      trades: {},
-      inviteTracking: {},
-      history: []
-    };
-  }
-
-  if (!Array.isArray(data.gcubeParty.history)) {
-    data.gcubeParty.history = [];
-  }
-
-  data.gcubeParty.history.push({
-    type: "item_sold",
-    userId: interaction.user.id,
-    item: item.name,
-    amount: sellPrice,
-    date: new Date().toISOString()
-  });
-
-  saveData(data);
+  addGC(data, user, sellValue);
+  saveData();
 
   return interaction.reply({
-    content:
-      `✅ Sold **${item.name}** for **${sellPrice} GC**.\n` +
-      `💰 Current balance: **${user.balance} GC**`,
-    ephemeral: true
+    content: `💰 Sold **${item.name}** for **${sellValue} GC**.`,
+    ephemeral: false
   });
 }
 
-// EXPORT COMMANDS AND HANDLERS
 module.exports.gcubePayCommand = gcubePayCommand;
 module.exports.gcubeSellCommand = gcubeSellCommand;
 module.exports.handleGCubePay = handleGCubePay;
 module.exports.handleGCubeSell = handleGCubeSell;
+
+
+  
 // ========================================
 // GCUBE PARTY — PART 10
 // TRANSACTION HISTORY

@@ -2483,24 +2483,7 @@ gcubeCommand.addSubcommand(sub =>
     )
 );
 
-gcubeCommand.addSubcommand(sub =>
-  sub
-    .setName("equip")
-    .setDescription("Equip an owned collectible")
-    .addStringOption(option =>
-      option
-        .setName("item")
-        .setDescription("Choose the item to equip")
-        .setRequired(true)
-        .addChoices(
-          { name: "Golden Crown", value: "crown" },
-          { name: "Royal Diamond", value: "diamond" },
-          { name: "Mystic Crystal", value: "crystal" },
-          { name: "Champion Trophy", value: "trophy" },
-          { name: "Golden Dragon", value: "dragon" }
-        )
-    )
-);
+
 
 // ------------------------------------------------------------
 // VISUAL SHOP

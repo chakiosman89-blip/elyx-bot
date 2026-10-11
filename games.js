@@ -1950,3 +1950,58 @@ if (typeof originalGCubeRootHandler === "function") {
 
   console.log("✅ GCube public reply patch loaded.");
         }
+
+// ==================================================
+// GCUBE PARTY — DAILY ACTIVITY REWARDS CONFIG
+// Paste at the VERY END of games.js
+// ==================================================
+
+const GCUBE_ACTIVITY_REWARDS = {
+  messages: [
+    { count: 10, gc: 5 },
+    { count: 100, gc: 25 },
+    { count: 1000, gc: 100 }
+  ],
+
+  invites: [
+    { count: 10, gc: 20 },
+    { count: 25, gc: 50 },
+    { count: 50, gc: 100 },
+    { count: 100, gc: 250 },
+    { count: 250, gc: 500 }
+  ]
+};
+
+// India date helper
+function gcubeActivityDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
+
+// Message reward settings
+const GCUBE_DAILY_MESSAGE_REWARDS = [
+  { count: 10, gc: 5 },
+  { count: 100, gc: 25 },
+  { count: 1000, gc: 100 }
+];
+
+// Invite reward settings
+const GCUBE_INVITE_MILESTONE_REWARDS = [
+  { count: 10, gc: 20 },
+  { count: 25, gc: 50 },
+  { count: 50, gc: 100 },
+  { count: 100, gc: 250 },
+  { count: 250, gc: 500 }
+];
+
+module.exports.GCUBE_ACTIVITY_REWARDS = GCUBE_ACTIVITY_REWARDS;
+module.exports.GCUBE_DAILY_MESSAGE_REWARDS =
+  GCUBE_DAILY_MESSAGE_REWARDS;
+module.exports.GCUBE_INVITE_MILESTONE_REWARDS =
+  GCUBE_INVITE_MILESTONE_REWARDS;
+
+console.log("✅ GCube activity reward settings loaded.");

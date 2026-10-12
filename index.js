@@ -1,5 +1,5 @@
 // ============================================
-// ELYX TRADING — AI + GCUBE PARTY
+// ELYX TRADING — AI + GCUBE PARTY + AI IMAGES
 // Main File: index.js
 // ============================================
 
@@ -72,7 +72,10 @@ function loadData() {
       ...saved
     };
   } catch (error) {
-    console.error("❌ Could not load data.json:", error.message);
+    console.error(
+      "❌ Could not load data.json:",
+      error.message
+    );
     process.exit(1);
   }
 }
@@ -95,7 +98,6 @@ function saveData() {
       ...data
     };
 
-    // Preserve GCube data stored by games.js
     if (existingData.gcubeParty) {
       safeData.gcubeParty = existingData.gcubeParty;
     }
@@ -108,7 +110,10 @@ function saveData() {
 
     fs.renameSync(tempFile, DATA_FILE);
   } catch (error) {
-    console.error("❌ Could not save data.json:", error.message);
+    console.error(
+      "❌ Could not save data.json:",
+      error.message
+    );
   }
 }
 
@@ -132,7 +137,9 @@ function addCommand(command) {
   }
 
   if (commands.has(json.name)) {
-    console.warn(`⚠️ Duplicate command skipped: /${json.name}`);
+    console.warn(
+      `⚠️ Duplicate command skipped: /${json.name}`
+    );
     return;
   }
 
@@ -191,7 +198,7 @@ addCommand(
 );
 
 // ============================================
-// GCUBE PARTY — UNIFIED COMMAND REGISTRATION
+// GCUBE PARTY COMMAND
 // ============================================
 
 if (
@@ -202,10 +209,10 @@ if (
   console.log("✅ Loaded unified /gcube command.");
 } else {
   console.error("❌ Unified /gcube command is missing.");
-} 
+}
 
 // ============================================
-// INTERACTION HANDLER
+// SLASH COMMAND HANDLER
 // ============================================
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -214,8 +221,9 @@ client.on(Events.InteractionCreate, async interaction => {
   const commandName = interaction.commandName;
 
   try {
-    // AI COMMANDS
-    if (["ai", "ask", "memory", "aistatus"].includes(commandName)) {
+    if (
+      ["ai", "ask", "memory", "aistatus"].includes(commandName)
+    ) {
       if (typeof ai.handleCommand !== "function") {
         await interaction.reply({
           content: "⚠️ AI module is not ready.",
@@ -233,7 +241,6 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // ALL GCUBE SUBCOMMANDS
     if (commandName === "gcube") {
       if (typeof gcube.handleGCubeRoot !== "function") {
         await interaction.reply({
@@ -244,11 +251,13 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       await gcube.handleGCubeRoot(interaction);
-      return;
     }
 
   } catch (error) {
-    console.error(`❌ Command /${commandName} failed:`, error);
+    console.error(
+      `❌ Command /${commandName} failed:`,
+      error
+    );
 
     const reply = {
       content: "❌ Command error. Please try again.",
@@ -264,18 +273,20 @@ client.on(Events.InteractionCreate, async interaction => {
 });
 
 // ============================================
-// AI NORMAL CHAT
+// AI NORMAL CHAT + IMAGE GENERATOR
 // ============================================
 
 client.on(Events.MessageCreate, async message => {
   try {
     if (message.author.bot || !client.user) return;
 
+    // AI responds when mentioned or when a user replies to it.
     const mentioned = message.mentions.has(client.user.id);
     let repliedToBot = false;
 
     if (message.reference?.messageId) {
-      const repliedMessage = await message.fetchReference()
+      const repliedMessage = await message
+        .fetchReference()
         .catch(() => null);
 
       if (repliedMessage?.author.id === client.user.id) {
@@ -286,12 +297,17 @@ client.on(Events.MessageCreate, async message => {
     if (!mentioned && !repliedToBot) return;
 
     if (!data.aiEnabled) {
-      await message.reply("⚠️ Elyx AI is currently disabled.");
+      await message.reply(
+        "⚠️ Elyx AI is currently disabled."
+      );
       return;
     }
 
     const cleanMessage = message.content
-      .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
+      .replace(
+        new RegExp(`<@!?${client.user.id}>`, "g"),
+        ""
+      )
       .trim();
 
     if (!cleanMessage) {
@@ -301,6 +317,20 @@ client.on(Events.MessageCreate, async message => {
       return;
     }
 
+    // IMAGE GENERATOR
+    // Requires handleImageMessage to be exported from ai.js.
+    if (typeof ai.handleImageMessage === "function") {
+      const imageHandled = await ai.handleImageMessage(message);
+
+      // Image request handled; don't send a second AI text reply.
+      if (imageHandled) return;
+    } else {
+      console.warn(
+        "⚠️ Image handler not found in ai.js."
+      );
+    }
+
+    // NORMAL AI CHAT
     await message.channel.sendTyping();
 
     const reply = await ai.generateReply({
@@ -313,10 +343,15 @@ client.on(Events.MessageCreate, async message => {
     });
 
     await message.reply(
-      String(reply || "Bhai, abhi reply nahi bana.").slice(0, 1900)
+      String(reply || "Bhai, abhi reply nahi bana.")
+        .slice(0, 1900)
     );
+
   } catch (error) {
-    console.error("❌ AI chat error:", error.message);
+    console.error(
+      "❌ AI chat error:",
+      error.message
+    );
 
     await message.reply(
       "❌ AI reply mein error aaya. Thodi der baad try kar."
@@ -330,12 +365,18 @@ client.on(Events.MessageCreate, async message => {
 
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot || !message.guild) return;
-  if (typeof gcube.handleGCubeMessage !== "function") return;
+
+  if (typeof gcube.handleGCubeMessage !== "function") {
+    return;
+  }
 
   try {
     await gcube.handleGCubeMessage(message);
   } catch (error) {
-    console.error("❌ GCube message counter error:", error.message);
+    console.error(
+      "❌ GCube message counter error:",
+      error.message
+    );
   }
 });
 
@@ -361,6 +402,7 @@ client.on(Events.InteractionCreate, async interaction => {
     ) {
       await gcube.handleGCubeQuestButton(interaction);
     }
+
   } catch (error) {
     console.error("❌ GCube button error:", error);
 
@@ -379,7 +421,9 @@ client.on(Events.InteractionCreate, async interaction => {
 
 client.once(Events.ClientReady, async () => {
   for (const guild of client.guilds.cache.values()) {
-    if (typeof gcube.cacheGuildInvites !== "function") continue;
+    if (typeof gcube.cacheGuildInvites !== "function") {
+      continue;
+    }
 
     try {
       await gcube.cacheGuildInvites(guild);
@@ -393,17 +437,22 @@ client.once(Events.ClientReady, async () => {
 });
 
 client.on(Events.GuildMemberAdd, async member => {
-  if (typeof gcube.handleGCubeMemberJoin !== "function") return;
+  if (typeof gcube.handleGCubeMemberJoin !== "function") {
+    return;
+  }
 
   try {
     await gcube.handleGCubeMemberJoin(client, member);
   } catch (error) {
-    console.error("❌ GCube invite tracking error:", error.message);
+    console.error(
+      "❌ GCube invite tracking error:",
+      error.message
+    );
   }
 });
 
 // ============================================
-// SINGLE SLASH COMMAND REGISTRATION
+// SLASH COMMAND REGISTRATION
 // ============================================
 
 client.once(Events.ClientReady, async () => {
@@ -416,7 +465,9 @@ client.once(Events.ClientReady, async () => {
     const commandList = [...commands.values()]
       .map(command => command.toJSON());
 
-    console.log(`📋 Preparing ${commandList.length} commands...`);
+    console.log(
+      `📋 Preparing ${commandList.length} commands...`
+    );
 
     if (commandList.length > 100) {
       throw new Error(
@@ -425,7 +476,7 @@ client.once(Events.ClientReady, async () => {
     }
 
     if (process.env.GUILD_ID) {
-      // Clear old global commands, then register server commands.
+      // Clear old global commands and register guild commands.
       await rest.put(
         Routes.applicationCommands(client.user.id),
         { body: [] }
@@ -440,6 +491,7 @@ client.once(Events.ClientReady, async () => {
       );
 
       console.log("✅ Server slash commands registered.");
+
     } else {
       await rest.put(
         Routes.applicationCommands(client.user.id),
@@ -447,10 +499,15 @@ client.once(Events.ClientReady, async () => {
       );
 
       console.log("✅ Global slash commands registered.");
-      console.log("ℹ️ Global commands may take time to appear.");
+      console.log(
+        "ℹ️ Global commands may take time to appear."
+      );
     }
 
-    console.log(`✅ Registered ${commandList.length} commands.`);
+    console.log(
+      `✅ Registered ${commandList.length} commands.`
+    );
+
   } catch (error) {
     console.error(
       "❌ Slash command registration failed:",
@@ -460,11 +517,14 @@ client.once(Events.ClientReady, async () => {
 });
 
 // ============================================
-// LOGIN — KEEP THIS AT THE END
+// LOGIN
 // ============================================
 
 console.log("🤖 Starting Elyx Trading bot...");
 
 client.login(process.env.DISCORD_TOKEN).catch(error => {
-  console.error("❌ Discord login failed:", error.message);
+  console.error(
+    "❌ Discord login failed:",
+    error.message
+  );
 });

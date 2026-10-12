@@ -492,3 +492,150 @@ module.exports = {
 };
 
 console.log("✅ Elyx AI friend engine loaded.");
+
+// ==========================================
+// 🎮 ELYX PARTY GAMES
+// ==========================================
+
+const elyxGames = new Map();
+
+const elyxQuiz = [
+  {
+    q: "Which planet is called the Red Planet?",
+    options: ["Earth", "Mars", "Jupiter", "Venus"],
+    answer: 1
+  },
+  {
+    q: "How many days are there in a leap year?",
+    options: ["364", "365", "366", "367"],
+    answer: 2
+  },
+  {
+    q: "Which is the largest ocean?",
+    options: ["Atlantic", "Indian", "Arctic", "Pacific"],
+    answer: 3
+  },
+  {
+    q: "What is 12 × 12?",
+    options: ["124", "144", "132", "154"],
+    answer: 1
+  },
+  {
+    q: "Which animal is known as the King of the Jungle?",
+    options: ["Tiger", "Lion", "Elephant", "Wolf"],
+    answer: 1
+  }
+];
+
+function startElyxGuess(userId) {
+  const number = Math.floor(Math.random() * 100) + 1;
+
+  elyxGames.set(userId, {
+    type: "guess",
+    number,
+    attempts: 7
+  });
+
+  return "🎲 **Elyx Number Guess!**\nI'm thinking of a number between **1–100**.\nYou have **7 attempts**!\n\nUse `/gameguess number:50` to guess.";
+}
+
+function playElyxRPS(choice) {
+  const choices = ["rock", "paper", "scissors"];
+
+  if (!choices.includes(choice.toLowerCase())) {
+    return "❌ Choose rock, paper, or scissors!";
+  }
+
+  const bot = choices[Math.floor(Math.random() * 3)];
+  const user = choice.toLowerCase();
+
+  let result;
+
+  if (user === bot) {
+    result = "🤝 It's a draw!";
+  } else if (
+    (user === "rock" && bot === "scissors") ||
+    (user === "paper" && bot === "rock") ||
+    (user === "scissors" && bot === "paper")
+  ) {
+    result = "🏆 You win!";
+  } else {
+    result = "😂 I win! Try again!";
+  }
+
+  return `🎮 **Elyx Rock Paper Scissors**\n\nYou: **${user.toUpperCase()}**\nMe: **${bot.toUpperCase()}**\n\n${result}`;
+}
+
+function startElyxQuiz(userId) {
+  const question = elyxQuiz[
+    Math.floor(Math.random() * elyxQuiz.length)
+  ];
+
+  elyxGames.set(userId, {
+    type: "quiz",
+    question
+  });
+
+  return (
+    `🧠 **Elyx Quick Quiz**\n\n` +
+    `❓ ${question.q}\n\n` +
+    question.options.map((option, i) => `${i + 1}. ${option}`).join("\n") +
+    `\n\nUse \`/gameanswer number:1\` to answer.`
+  );
+}
+
+function answerElyxQuiz(userId, answer) {
+  const game = elyxGames.get(userId);
+
+  if (!game || game.type !== "quiz") {
+    return "❌ Start a quiz first with `/gamequiz`!";
+  }
+
+  elyxGames.delete(userId);
+
+  if (Number(answer) - 1 === game.question.answer) {
+    return "🎉 **Correct answer! You're smart!**";
+  }
+
+  return `❌ Not quite! The correct answer was **${game.question.options[game.question.answer]}**.`;
+}
+
+function guessElyxNumber(userId, guess) {
+  const game = elyxGames.get(userId);
+
+  if (!game || game.type !== "guess") {
+    return "❌ Start a game first with `/gameguessstart`!";
+  }
+
+  const number = Number(guess);
+
+  if (!Number.isInteger(number) || number < 1 || number > 100) {
+    return "❌ Enter a whole number from 1 to 100.";
+  }
+
+  game.attempts--;
+
+  if (number === game.number) {
+    elyxGames.delete(userId);
+    return `🎉 **YOU WON!** The number was ${number}!`;
+  }
+
+  if (game.attempts <= 0) {
+    elyxGames.delete(userId);
+    return `💀 Game over! The number was **${game.number}**.`;
+  }
+
+  return (
+    `${number < game.number ? "📈 Higher!" : "📉 Lower!"}\n` +
+    `❤️ Attempts left: **${game.attempts}**`
+  );
+}
+
+// Export functions for index.js integration.
+module.exports.elyxPartyGames = {
+  startElyxGuess,
+  playElyxRPS,
+  startElyxQuiz,
+  answerElyxQuiz,
+  guessElyxNumber
+};

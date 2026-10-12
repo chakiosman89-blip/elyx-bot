@@ -639,3 +639,136 @@ module.exports.elyxPartyGames = {
   answerElyxQuiz,
   guessElyxNumber
 };
+
+// ================================================
+// 🎨 ELYX AI - AUTOMATIC CHAT IMAGE GENERATOR
+// ================================================
+
+const { AttachmentBuilder } = require("discord.js");
+
+const elyxImageCooldown = new Map();
+
+async function handleImageMessage(message) {
+  try {
+    // Ignore bots and empty messages
+    if (!message || message.author.bot || !message.guild) {
+      return false;
+    }
+
+    const apiKey = process.env.POLLINATIONS_API_KEY;
+
+    if (!apiKey) {
+      console.error("[Elyx Image] Missing POLLINATIONS_API_KEY");
+      return false;
+    }
+
+    const originalText = message.content.trim();
+
+    // Detect image-generation requests in English and Hinglish
+    const imageRequestPattern =
+      /\b(make|create|generate|draw|design)\b.{0,50}\b(image|picture|photo|wallpaper|logo|art)\b|\b(image|picture|photo|wallpaper|logo)\b.{0,50}\b(bana|banao|banade|create|generate|draw)\b|\b(bana|banao|banade)\b.{0,40}\b(image|photo|picture|logo|wallpaper)\b/i;
+
+    if (!imageRequestPattern.test(originalText)) {
+      return false;
+    }
+
+    // Avoid generating images repeatedly
+    const now = Date.now();
+    const lastUsed = elyxImageCooldown.get(message.author.id) || 0;
+
+    if (now - lastUsed < 20000) {
+      await message.reply(
+        "⏳ Bhai, ek image generate ho rahi hai ya cooldown hai. 20 seconds wait kar! 🎨"
+      );
+      return true;
+    }
+
+    // Remove bot mentions from the prompt
+    const prompt = originalText
+      .replace(/<@!?\d+>/g, "")
+      .replace(/^(elyx|ai)[,:\s]+/i, "")
+      .trim()
+      .slice(0, 1000);
+
+    if (!prompt) {
+      await message.reply("🎨 Bhai, bata kaisi image banani hai!");
+      return true;
+    }
+
+    elyxImageCooldown.set(message.author.id, now);
+
+    const status = await message.reply(
+      "🎨 **Elyx AI is creating your image...**\n⏳ Thoda wait kar bhai!"
+    );
+
+    try {
+      const imageUrl =
+        "https://gen.pollinations.ai/image/" +
+        encodeURIComponent(
+          "Create a high-quality image based on this request: " + prompt
+        );
+
+      const url = new URL(imageUrl);
+      url.searchParams.set("model", "zimage");
+      url.searchParams.set("width", "1024");
+      url.searchParams.set("height", "1024");
+
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: "image/*"
+        },
+        signal: AbortSignal.timeout(120000)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Pollinations API returned ${response.status}`);
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+
+      if (!contentType.startsWith("image/")) {
+        throw new Error("API did not return an image");
+      }
+
+      const imageBuffer = Buffer.from(await response.arrayBuffer());
+
+      // Avoid Discord attachment-size errors
+      if (imageBuffer.length > 8 * 1024 * 1024) {
+        throw new Error("Generated image exceeds the 8 MB upload limit");
+      }
+
+      const extension = contentType.includes("png") ? "png" : "jpg";
+
+      const attachment = new AttachmentBuilder(imageBuffer, {
+        name: `elyx-ai-image.${extension}`
+      });
+
+      await status.edit({
+        content: `🖼️ **Elyx AI Image Generator**\n💭 Prompt: ${prompt}`,
+        files: [attachment]
+      });
+
+      console.log("[Elyx Image] Image generated successfully.");
+      return true;
+
+    } catch (error) {
+      console.error("[Elyx Image]", error.message);
+
+      await status.edit({
+        content:
+          "❌ Image generate nahi hui bhai. API key, Pollen balance ya API status check kar."
+      });
+
+      return true;
+    }
+
+  } catch (error) {
+    console.error("[Elyx Image] Unexpected error:", error);
+    return false;
+  }
+}
+
+// Make the function available to index.js
+module.exports.handleImageMessage = handleImageMessage;

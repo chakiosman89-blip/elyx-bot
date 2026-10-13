@@ -252,4 +252,94 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// 🔥 ELYX AUTO CHAT ACTIVITY
+
+const AUTO_CHAT_CHANNEL_ID = '1557419019445731390';
+
+const activityMessages = [
+  '👀 Oye Elyx gang, sab gayab ho gaye kya? 😂 Koi toh chat karo! @everyone',
+  '💀 Bhai server mein itni shanti kyun hai? Sabki Wi-Fi chali gayi kya? 📶😂 @everyone',
+  '🗿 Silent readers, messages padhne aaye ho ya chat bhi karoge? 😂🔥 @everyone',
+  '🚨 Elyx gang attendance lagao! Aaj kaun-kaun online hai? 😂 @everyone',
+  '🥱 Yahan toh machhar bhi bore ho rahe hain! Koi baat karo 😂🦟 @everyone',
+  '🎮 Koi game khelega ya sab statue banke baithe ho? 😂🔥 @everyone',
+  '👻 Hello hello, koi hai ya sab ghost ban gaye? 👻😂 @everyone',
+  '🔥 Elyx gang, chat mein thodi jaan daalo! Kya chal raha hai? 😎 @everyone',
+  '😂 Itni shanti toh exam hall mein bhi nahi hoti! @everyone',
+  '📢 Oye legends, ek message toh banta hai bhai! 😂❤️ @everyone'
+];
+
+const activityState = {
+  lastMessageAt: Date.now(),
+  lastBotMessageAt: 0,
+  startedAt: Date.now(),
+  messages: []
+};
+
+// Normal chat ke messages count karo
+client.on(Events.MessageCreate, (message) => {
+  if (!message.guild || message.author.bot) return;
+  if (message.channel.id !== AUTO_CHAT_CHANNEL_ID) return;
+
+  const now = Date.now();
+
+  activityState.lastMessageAt = now;
+  activityState.messages.push(now);
+
+  activityState.messages = activityState.messages.filter(
+    (time) => now - time <= 30 * 60 * 1000
+  );
+});
+
+// Har minute activity check karo
+setInterval(async () => {
+  if (!client.isReady()) return;
+
+  const now = Date.now();
+
+  // Startup ke 30 minute baad checking shuru hogi
+  if (now - activityState.startedAt < 30 * 60 * 1000) return;
+
+  activityState.messages = activityState.messages.filter(
+    (time) => now - time <= 30 * 60 * 1000
+  );
+
+  const noMessagesFor15Min =
+    now - activityState.lastMessageAt >= 15 * 60 * 1000;
+
+  const fewerThan10Messages =
+    activityState.messages.length < 10;
+
+  const cooldownOver =
+    now - activityState.lastBotMessageAt >= 30 * 60 * 1000;
+
+  if (!cooldownOver) return;
+
+  if (noMessagesFor15Min || fewerThan10Messages) {
+    try {
+      const channel = await client.channels.fetch(
+        AUTO_CHAT_CHANNEL_ID
+      );
+
+      if (!channel || !channel.isTextBased()) return;
+
+      const randomMessage =
+        activityMessages[
+          Math.floor(Math.random() * activityMessages.length)
+        ];
+
+      await channel.send({
+        content: randomMessage,
+        allowedMentions: { parse: ['everyone'] }
+      });
+
+      activityState.lastBotMessageAt = Date.now();
+
+      console.log('✅ Elyx Auto Activity message sent!');
+    } catch (error) {
+      console.error('❌ Auto Activity Error:', error.message);
+    }
+  }
+}, 60 * 1000);
+
 client.login(process.env.DISCORD_TOKEN);

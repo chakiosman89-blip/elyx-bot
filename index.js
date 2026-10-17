@@ -7,6 +7,9 @@ const {
   ButtonStyle
 } = require('discord.js');
 
+// NEW: Giveaway system connection
+const giveaway = require('./giveaway');
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -21,18 +24,28 @@ const TARGET_CHANNEL_IDS = [
   '1550877278144172062'
 ];
 
-// Sirf tere messages par buttons banenge
+// Owner ID
 const OWNER_USER_ID = '1535048066875527198';
 
-// Server ka Subscriber role
+// Subscriber role
 const SUBSCRIBER_ROLE_NAME = 'Subscriber';
 
-// Likes memory mein store honge
+// Likes memory
 const likes = new Map();
 
 client.once(Events.ClientReady, (bot) => {
-  console.log(`✅ ${bot.user.tag} online hai!`);
-  console.log('✅ Elyx Comments Box + Like + Invite + Subscribe ready!');
+  console.log(`Elyx bot online: ${bot.user.tag}`);
+  console.log('Comments Box + Like + Invite + Subscribe ready!');
+});
+
+// NEW: Giveaway setup on startup
+client.once(Events.ClientReady, async () => {
+  try {
+    await giveaway.setupGiveawaySystem(client);
+    console.log('Giveaway approval system initialized.');
+  } catch (error) {
+    console.error('Giveaway startup error:', error);
+  }
 });
 
 // Buttons banana
@@ -66,7 +79,7 @@ function createButtons(threadId, likeCount = 0) {
   return [firstRow, secondRow];
 }
 
-// Announcement/Giveaway par tera message aane par
+// Comments Box
 client.on(Events.MessageCreate, async (message) => {
   if (!message.guild || message.author.bot) return;
   if (message.author.id !== OWNER_USER_ID) return;
@@ -109,18 +122,27 @@ client.on(Events.MessageCreate, async (message) => {
       components: [firstRow, secondRow]
     });
 
-    console.log(`✅ Buttons created for message ${message.id}`);
+    console.log(`Comments buttons created for ${message.id}`);
   } catch (error) {
-    console.error('❌ Comments Box Error:', error.message);
+    console.error('Comments Box Error:', error.message);
   }
 });
 
-// Button clicks
+// Button clicks + NEW Giveaway interactions
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isButton()) return;
-
   try {
-    // ❤️ LIKE BUTTON
+    // NEW: Handle giveaway buttons and application form first
+    const handled = await giveaway.handleInteraction(
+      interaction,
+      client
+    );
+
+    if (handled) return;
+
+    // Existing buttons
+    if (!interaction.isButton()) return;
+
+    // LIKE BUTTON
     if (interaction.customId.startsWith('elyx:like:')) {
       const threadId = interaction.customId.split(':')[2];
       const messageId = interaction.message.id;
@@ -170,7 +192,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // 🔗 INVITE FRIENDS BUTTON
+    // INVITE FRIENDS BUTTON
     if (interaction.customId === 'elyx:invite') {
       const invite = await interaction.channel.createInvite({
         maxAge: 0,
@@ -181,21 +203,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.reply({
         content:
-          `🔗 **Elyx Trading Invite Link**\n${invite.url}\n\n` +
-          '♾️ Never expires\n👥 Unlimited uses',
+          `Elyx Trading Invite Link\n${invite.url}\n\n` +
+          'Never expires • Unlimited uses',
         ephemeral: true
       });
 
       return;
     }
 
-    // 🔔 SUBSCRIBE BUTTON
+    // SUBSCRIBE BUTTON
     if (interaction.customId === 'elyx:subscribe') {
       const guild = interaction.guild;
 
       if (!guild) {
         await interaction.reply({
-          content: '❌ Ye button server ke andar use karo.',
+          content: 'Use this button inside the server.',
           ephemeral: true
         });
         return;
@@ -209,26 +231,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (!role) {
         await interaction.reply({
-          content: '❌ Subscriber role nahi mila.',
+          content: 'Subscriber role not found.',
           ephemeral: true
         });
         return;
       }
 
-      const member = await guild.members.fetch(interaction.user.id);
+      const member = await guild.members.fetch(
+        interaction.user.id
+      );
 
       if (member.roles.cache.has(role.id)) {
         await member.roles.remove(role);
 
         await interaction.reply({
-          content: '🔕 Aap unsubscribe ho gaye!',
+          content: 'You have unsubscribed.',
           ephemeral: true
         });
       } else {
         await member.roles.add(role);
 
         await interaction.reply({
-          content: '🔔 Aap successfully subscribe ho gaye!',
+          content: 'You have successfully subscribed.',
           ephemeral: true
         });
       }
@@ -236,37 +260,47 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
   } catch (error) {
-    console.error('❌ Button Error:', error);
+    console.error('Interaction Error:', error);
 
     const reply = {
       content:
-        '❌ Button use nahi hua. Bot ki permissions aur role position check karo.',
+        'Button failed. Please check the bot permissions.',
       ephemeral: true
     };
 
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(reply).catch(() => {});
-    } else {
-      await interaction.reply(reply).catch(() => {});
+    if (interaction.isRepliable()) {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(reply).catch(() => {});
+      } else {
+        await interaction.reply(reply).catch(() => {});
+      }
     }
   }
 });
 
-// 🔥 ELYX AUTO CHAT ACTIVITY
+// NEW: Giveaway messages get published through giveaway.js
+client.on(Events.MessageCreate, async (message) => {
+  try {
+    await giveaway.handleGiveawayMessage(message, client);
+  } catch (error) {
+    console.error('Giveaway message error:', error);
+  }
+});
 
+// AUTO CHAT ACTIVITY
 const AUTO_CHAT_CHANNEL_ID = '1557419019445731390';
 
 const activityMessages = [
-  '👀 Oye Elyx gang, sab gayab ho gaye kya? 😂 Koi toh chat karo! @everyone',
-  '💀 Bhai server mein itni shanti kyun hai? Sabki Wi-Fi chali gayi kya? 📶😂 @everyone',
-  '🗿 Silent readers, messages padhne aaye ho ya chat bhi karoge? 😂🔥 @everyone',
-  '🚨 Elyx gang attendance lagao! Aaj kaun-kaun online hai? 😂 @everyone',
-  '🥱 Yahan toh machhar bhi bore ho rahe hain! Koi baat karo 😂🦟 @everyone',
-  '🎮 Koi game khelega ya sab statue banke baithe ho? 😂🔥 @everyone',
-  '👻 Hello hello, koi hai ya sab ghost ban gaye? 👻😂 @everyone',
-  '🔥 Elyx gang, chat mein thodi jaan daalo! Kya chal raha hai? 😎 @everyone',
-  '😂 Itni shanti toh exam hall mein bhi nahi hoti! @everyone',
-  '📢 Oye legends, ek message toh banta hai bhai! 😂❤️ @everyone'
+  'Oye Elyx gang, sab gayab ho gaye kya? Koi toh chat karo! @everyone',
+  'Bhai server mein itni shanti kyun hai? Sabki Wi-Fi chali gayi kya? @everyone',
+  'Silent readers, messages padhne aaye ho ya chat bhi karoge? @everyone',
+  'Elyx gang attendance lagao! Aaj kaun-kaun online hai? @everyone',
+  'Yahan toh machhar bhi bore ho rahe hain! Koi baat karo @everyone',
+  'Koi game khelega ya sab statue banke baithe ho? @everyone',
+  'Hello hello, koi hai ya sab ghost ban gaye? @everyone',
+  'Elyx gang, chat mein thodi jaan daalo! Kya chal raha hai? @everyone',
+  'Itni shanti toh exam hall mein bhi nahi hoti! @everyone',
+  'Oye legends, ek message toh banta hai bhai! @everyone'
 ];
 
 const activityState = {
@@ -276,7 +310,7 @@ const activityState = {
   messages: []
 };
 
-// Normal chat ke messages count karo
+// Normal chat messages count
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot) return;
   if (message.channel.id !== AUTO_CHAT_CHANNEL_ID) return;
@@ -291,13 +325,13 @@ client.on(Events.MessageCreate, (message) => {
   );
 });
 
-// Har minute activity check karo
+// Check activity every minute
 setInterval(async () => {
   if (!client.isReady()) return;
 
   const now = Date.now();
 
-  // Startup ke 30 minute baad checking shuru hogi
+  // Start checking 30 minutes after startup
   if (now - activityState.startedAt < 30 * 60 * 1000) return;
 
   activityState.messages = activityState.messages.filter(
@@ -335,9 +369,9 @@ setInterval(async () => {
 
       activityState.lastBotMessageAt = Date.now();
 
-      console.log('✅ Elyx Auto Activity message sent!');
+      console.log('Elyx Auto Activity message sent!');
     } catch (error) {
-      console.error('❌ Auto Activity Error:', error.message);
+      console.error('Auto Activity Error:', error.message);
     }
   }
 }, 60 * 1000);

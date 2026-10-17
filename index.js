@@ -7,18 +7,23 @@ const {
   ButtonStyle
 } = require('discord.js');
 
-// NEW: Giveaway system connection
+// Giveaway system
 const giveaway = require('./giveaway');
+
+// ================= CLIENT =================
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ]
 });
 
-// Announcements aur Giveaways channels
+// ================= SETTINGS =================
+
+// Comments Box target channels
 const TARGET_CHANNEL_IDS = [
   '1551437304470573216',
   '1550877278144172062'
@@ -30,68 +35,53 @@ const OWNER_USER_ID = '1535048066875527198';
 // Subscriber role
 const SUBSCRIBER_ROLE_NAME = 'Subscriber';
 
-// Likes memory
+// Auto Chat Activity channel
+const AUTO_CHAT_CHANNEL_ID = '1557419019445731390';
+
+// ================= LIKE SYSTEM =================
+
 const likes = new Map();
 
-client.once(Events.ClientReady, (bot) => {
+// ================= BOT READY =================
+
+client.once(Events.ClientReady, async (bot) => {
   console.log(`Elyx bot online: ${bot.user.tag}`);
   console.log('Comments Box + Like + Invite + Subscribe ready!');
-});
 
-// NEW: Giveaway setup on startup
-client.once(Events.ClientReady, async () => {
   try {
+    // Setup giveaway application panel
     await giveaway.setupGiveawaySystem(client);
-    console.log('Giveaway approval system initialized.');
+
+    // Start automatic giveaway ending timer
+    giveaway.startGiveawayTimer(client);
+
+    // Cache existing server invites for invite competition
+    for (const guild of client.guilds.cache.values()) {
+      await giveaway.cacheGuildInvites(guild);
+    }
+
+    console.log('Giveaway system initialized.');
   } catch (error) {
     console.error('Giveaway startup error:', error);
   }
 });
 
-// Buttons banana
-function createButtons(threadId, likeCount = 0) {
-  const firstRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`elyx:like:${threadId}`)
-      .setLabel(`❤️ Like (${likeCount})`)
-      .setStyle(ButtonStyle.Primary),
+// ================= COMMENTS BOX =================
 
-    new ButtonBuilder()
-      .setCustomId('elyx:invite')
-      .setLabel('🔗 Invite Friends')
-      .setStyle(ButtonStyle.Success),
-
-    new ButtonBuilder()
-      .setCustomId('elyx:subscribe')
-      .setLabel('🔔 Subscribe')
-      .setStyle(ButtonStyle.Secondary)
-  );
-
-  const secondRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setLabel('💬 Comments')
-      .setStyle(ButtonStyle.Link)
-      .setURL(
-        `https://discord.com/channels/${client.guildId || ''}/${threadId}`
-      )
-  );
-
-  return [firstRow, secondRow];
-}
-
-// Comments Box
 client.on(Events.MessageCreate, async (message) => {
   if (!message.guild || message.author.bot) return;
   if (message.author.id !== OWNER_USER_ID) return;
   if (!TARGET_CHANNEL_IDS.includes(message.channel.id)) return;
 
   try {
+    // Create a comments thread
     const thread = await message.startThread({
       name: 'Comments',
       autoArchiveDuration: 1440,
       reason: 'Elyx Trading Comments Box'
     });
 
+    // Like, Invite and Subscribe buttons
     const firstRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`elyx:like:${thread.id}`)
@@ -109,6 +99,7 @@ client.on(Events.MessageCreate, async (message) => {
         .setStyle(ButtonStyle.Secondary)
     );
 
+    // Comments thread link
     const secondRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setLabel('💬 Comments')
@@ -128,10 +119,11 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-// Button clicks + NEW Giveaway interactions
+// ================= ALL BUTTONS + GIVEAWAY FORMS =================
+
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    // NEW: Handle giveaway buttons and application form first
+    // Handle giveaway interactions first
     const handled = await giveaway.handleInteraction(
       interaction,
       client
@@ -139,10 +131,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (handled) return;
 
-    // Existing buttons
+    // Existing buttons below
     if (!interaction.isButton()) return;
 
-    // LIKE BUTTON
+    // ================= LIKE BUTTON =================
+
     if (interaction.customId.startsWith('elyx:like:')) {
       const threadId = interaction.customId.split(':')[2];
       const messageId = interaction.message.id;
@@ -192,8 +185,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // INVITE FRIENDS BUTTON
+    // ================= INVITE FRIENDS =================
+
     if (interaction.customId === 'elyx:invite') {
+      if (!interaction.channel) {
+        await interaction.reply({
+          content: 'Use this button inside a server channel.',
+          ephemeral: true
+        });
+        return;
+      }
+
       const invite = await interaction.channel.createInvite({
         maxAge: 0,
         maxUses: 0,
@@ -203,7 +205,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.reply({
         content:
-          `Elyx Trading Invite Link\n${invite.url}\n\n` +
+          `🔗 **Elyx Trading Invite Link**\n${invite.url}\n\n` +
           'Never expires • Unlimited uses',
         ephemeral: true
       });
@@ -211,7 +213,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // SUBSCRIBE BUTTON
+    // ================= SUBSCRIBE BUTTON =================
+
     if (interaction.customId === 'elyx:subscribe') {
       const guild = interaction.guild;
 
@@ -262,13 +265,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
   } catch (error) {
     console.error('Interaction Error:', error);
 
-    const reply = {
-      content:
-        'Button failed. Please check the bot permissions.',
-      ephemeral: true
-    };
-
     if (interaction.isRepliable()) {
+      const reply = {
+        content: 'Action failed. Please check bot permissions.',
+        ephemeral: true
+      };
+
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp(reply).catch(() => {});
       } else {
@@ -278,17 +280,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// NEW: Giveaway messages get published through giveaway.js
+// ================= GIVEAWAY MESSAGE TRACKING =================
+
 client.on(Events.MessageCreate, async (message) => {
   try {
     await giveaway.handleGiveawayMessage(message, client);
   } catch (error) {
-    console.error('Giveaway message error:', error);
+    console.error('Giveaway message tracking error:', error);
   }
 });
 
-// AUTO CHAT ACTIVITY
-const AUTO_CHAT_CHANNEL_ID = '1557419019445731390';
+// ================= GIVEAWAY INVITE TRACKING =================
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  try {
+    await giveaway.handleMemberJoin(member);
+  } catch (error) {
+    console.error('Giveaway invite tracking error:', error);
+  }
+});
+
+// ================= AUTO CHAT ACTIVITY =================
 
 const activityMessages = [
   'Oye Elyx gang, sab gayab ho gaye kya? Koi toh chat karo! @everyone',
@@ -310,7 +322,7 @@ const activityState = {
   messages: []
 };
 
-// Normal chat messages count
+// Track normal member messages in the activity channel
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot) return;
   if (message.channel.id !== AUTO_CHAT_CHANNEL_ID) return;
@@ -331,8 +343,10 @@ setInterval(async () => {
 
   const now = Date.now();
 
-  // Start checking 30 minutes after startup
-  if (now - activityState.startedAt < 30 * 60 * 1000) return;
+  // Begin checks 30 minutes after startup
+  if (now - activityState.startedAt < 30 * 60 * 1000) {
+    return;
+  }
 
   activityState.messages = activityState.messages.filter(
     (time) => now - time <= 30 * 60 * 1000
@@ -364,7 +378,9 @@ setInterval(async () => {
 
       await channel.send({
         content: randomMessage,
-        allowedMentions: { parse: ['everyone'] }
+        allowedMentions: {
+          parse: ['everyone']
+        }
       });
 
       activityState.lastBotMessageAt = Date.now();
@@ -375,5 +391,7 @@ setInterval(async () => {
     }
   }
 }, 60 * 1000);
+
+// ================= LOGIN =================
 
 client.login(process.env.DISCORD_TOKEN);

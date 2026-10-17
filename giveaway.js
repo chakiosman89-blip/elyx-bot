@@ -5,9 +5,7 @@ const {
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
-  TextInputStyle,
-  StringSelectMenuBuilder,
-  ChannelType
+  TextInputStyle
 } = require('discord.js');
 
 const fs = require('fs');
@@ -58,6 +56,7 @@ const drafts = new Map();
 function saveData() {
   try {
     const temp = `${DATA_FILE}.tmp`;
+
     fs.writeFileSync(temp, JSON.stringify(data, null, 2));
     fs.renameSync(temp, DATA_FILE);
   } catch (error) {
@@ -66,8 +65,9 @@ function saveData() {
 }
 
 function safeText(value, max = 1000) {
-  return String(value || 'Not provided').trim().slice(0, max) ||
-    'Not provided';
+  return String(value || 'Not provided')
+    .trim()
+    .slice(0, max) || 'Not provided';
 }
 
 function imageUrl(value) {
@@ -75,12 +75,76 @@ function imageUrl(value) {
 
   try {
     const url = new URL(value.trim());
+
     return ['http:', 'https:'].includes(url.protocol)
       ? url.toString()
       : null;
   } catch {
     return null;
   }
+}
+
+// ================= CUSTOM DURATION =================
+
+// Accepts: 30m, 12 hours, 5 days, 2 weeks, 1d 12h
+function parseDuration(value) {
+  const input = String(value || '').trim().toLowerCase();
+
+  const pattern =
+    /(\d+)\s*(weeks?|w|days?|d|hours?|hrs?|h|minutes?|mins?|m)\b/g;
+
+  let match;
+  let total = 0;
+  let found = false;
+  let remaining = input;
+
+  while ((match = pattern.exec(input)) !== null) {
+    found = true;
+
+    const amount = Number(match[1]);
+    const unit = match[2];
+
+    if (unit.startsWith('w')) total += amount * 7 * 86400000;
+    else if (unit.startsWith('d')) total += amount * 86400000;
+    else if (unit.startsWith('h')) total += amount * 3600000;
+    else total += amount * 60000;
+
+    remaining = remaining.replace(match[0], '');
+  }
+
+  if (!found || remaining.replace(/[\s,]+/g, '') !== '') {
+    return null;
+  }
+
+  // Minimum 1 minute; maximum 365 days.
+  if (total < 60000 || total > 365 * 86400000) {
+    return null;
+  }
+
+  return total;
+}
+
+// Select the automatic winner engine from the host's text.
+// Other custom methods are displayed, but use random selection.
+function getWinnerEngine(value) {
+  const text = String(value || '').toLowerCase();
+
+  if (
+    text.includes('invite') ||
+    text.includes('referral')
+  ) {
+    return 'invites';
+  }
+
+  if (
+    text.includes('message') ||
+    text.includes('chat') ||
+    text.includes('msg')
+  ) {
+    return 'messages';
+  }
+
+  return 'random';
 }
 
 // ================= HOST PANEL =================
@@ -91,16 +155,15 @@ function panelEmbed() {
     .setTitle('🎁 HOST A GIVEAWAY')
     .setDescription(
       'Want to host a giveaway in Elyx Trading?\n\n' +
-      'Click the button below and submit your application.\n\n' +
-      '📋 Your application will be reviewed by the server owner.\n' +
-      '✅ Once approved, your giveaway will be published automatically.\n' +
-      '📢 All approved giveaways will appear in the announcements channel.\n\n' +
+      'Click below and submit your application.\n\n' +
+      '✅ Your application will be reviewed by the owner.\n' +
+      '📢 Approved giveaways will be published automatically.\n\n' +
       '━━━━━━━━━━━━━━━━━━━━\n\n' +
       '📜 **HOSTING RULES**\n\n' +
-      '・Provide accurate giveaway and prize details.\n' +
+      '・Provide accurate prize details.\n' +
       '・Fake prizes and misleading information are not allowed.\n' +
-      '・Choose your giveaway type and winner method carefully.\n' +
-      '・Duplicate or incomplete applications may be rejected.\n' +
+      '・Write clear entry requirements.\n' +
+      '・Incomplete applications may be rejected.\n' +
       '・Only approved applications will be published.\n\n' +
       '━━━━━━━━━━━━━━━━━━━━\n\n' +
       'Ready to host? Apply below! 👇'
@@ -126,14 +189,16 @@ function applicationEmbed(app) {
   const colors = {
     pending: 0xF1C40F,
     approved: 0x2ECC71,
-    denied: 0xE74C3C,
-    ended: 0x95A5A6
+    denied: 0xE74C3C
   };
 
   const embed = new EmbedBuilder()
     .setColor(colors[app.status] || 0x5865F2)
     .setTitle('🎁 Giveaway Hosting Application')
-    .setDescription(`**Host:** <@${app.userId}>`)
+    .setDescription(
+      `**Host:** <@${app.userId}>\n` +
+      `**Discord Username:** ${safeText(app.username, 80)}`
+    )
     .addFields(
       {
         name: '📌 Status',
@@ -142,44 +207,47 @@ function applicationEmbed(app) {
       },
       {
         name: '🎮 Game',
-        value: safeText(app.game, 80),
+        value: safeText(app.game, 100),
         inline: true
       },
       {
         name: '🏷️ Giveaway Type',
-        value: safeText(app.giveawayType, 80),
+        value: safeText(app.giveawayType, 100),
         inline: true
       },
       {
         name: '📝 Title',
-        value: safeText(app.title, 150)
+        value: safeText(app.title, 200)
       },
       {
         name: '🏆 Prize',
-        value: `${safeText(app.prize, 100)} • ${safeText(app.prizeType, 50)}`,
-        inline: true
+        value: `${safeText(app.prize, 150)} • ${safeText(app.prizeType, 100)}`
       },
       {
-        name: '⏰ Duration',
-        value: safeText(app.duration, 50),
+        name: '⏳ Duration',
+        value: safeText(app.duration, 80),
         inline: true
       },
       {
         name: '👥 Winners',
-        value: safeText(app.winners, 10),
+        value: String(app.winners),
         inline: true
       },
       {
         name: '🎯 Winner Method',
-        value: safeText(app.winnerMode, 100)
+        value: safeText(app.winnerMode, 200)
       },
       {
-        name: '📖 Details',
+        name: '📖 Description',
         value: safeText(app.details, 1000)
       },
       {
         name: '📋 Entry Requirements',
         value: safeText(app.requirements, 1000)
+      },
+      {
+        name: '💬 Message / Invite Competition Rules',
+        value: safeText(app.competitionRules, 1000)
       }
     )
     .setTimestamp(new Date(app.createdAt));
@@ -208,25 +276,25 @@ function reviewRow(appId, status) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('giveaway:closed')
-      .setLabel(status === 'approved' ? 'PUBLISHED' : status.toUpperCase())
+      .setLabel(status === 'approved' ? 'PUBLISHED' : 'DENIED')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(true)
   );
 }
 
-// ================= FORM STEP 1 =================
+// ================= FORM 1 =================
 
 function firstModal() {
   const modal = new ModalBuilder()
     .setCustomId('giveaway:form1')
-    .setTitle('Giveaway Application • 1/2');
+    .setTitle('Giveaway Application • 1/3');
 
   const fields = [
-    ['game', 'Game name', 'Example: BMGO', TextInputStyle.Short, 80],
-    ['title', 'Giveaway title', 'Example: Weekly Coin Giveaway', TextInputStyle.Short, 100],
-    ['prize', 'Prize amount or value', 'Example: 100M coins', TextInputStyle.Short, 100],
-    ['prizeType', 'Prize type', 'Coins, RC, Nitro, etc.', TextInputStyle.Short, 50],
-    ['details', 'Giveaway description', 'Explain your giveaway.', TextInputStyle.Paragraph, 1000]
+    ['game', 'Game name', 'Any game name', TextInputStyle.Short, 80],
+    ['title', 'Giveaway title', 'Write your own title', TextInputStyle.Short, 100],
+    ['prize', 'Prize amount or value', 'Coins, RC, Nitro, etc.', TextInputStyle.Short, 100],
+    ['prizeType', 'Prize type', 'Write any prize type', TextInputStyle.Short, 50],
+    ['details', 'Giveaway description', 'Explain the giveaway', TextInputStyle.Paragraph, 1000]
   ];
 
   for (const [id, label, placeholder, style, max] of fields) {
@@ -238,83 +306,89 @@ function firstModal() {
       .setMaxLength(max)
       .setRequired(true);
 
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(input)
+    );
   }
 
   return modal;
 }
 
-// ================= FORM OPTIONS =================
-
-function optionRows(draft) {
-  const type = new StringSelectMenuBuilder()
-    .setCustomId('giveaway:type')
-    .setPlaceholder('Choose giveaway type')
-    .addOptions(
-      { label: 'Normal Giveaway', value: 'Normal Giveaway' },
-      { label: 'Coin Giveaway', value: 'Coin Giveaway' },
-      { label: 'Weekly Giveaway', value: 'Weekly Giveaway' },
-      { label: 'Message Competition', value: 'Message Competition' },
-      { label: 'Invite Competition', value: 'Invite Competition' },
-      { label: 'Random Giveaway', value: 'Random Giveaway' }
-    );
-
-  const duration = new StringSelectMenuBuilder()
-    .setCustomId('giveaway:duration')
-    .setPlaceholder('Choose duration')
-    .addOptions(
-      { label: '24 Hours', value: '24 hours' },
-      { label: '3 Days', value: '3 days' },
-      { label: '7 Days', value: '7 days' },
-      { label: '14 Days', value: '14 days' },
-      { label: 'Custom (explain in details)', value: 'Custom duration' }
-    );
-
-  const winner = new StringSelectMenuBuilder()
-    .setCustomId('giveaway:winner')
-    .setPlaceholder('Choose winner method')
-    .addOptions(
-      { label: 'Random Winner', value: 'Random winner' },
-      { label: 'Most Eligible Messages', value: 'Most eligible messages' },
-      { label: 'Most Valid Invites', value: 'Most valid invites' }
-    );
-
-  const next = new ButtonBuilder()
-    .setCustomId('giveaway:continue')
-    .setLabel('CONTINUE APPLICATION')
-    .setStyle(ButtonStyle.Success)
-    .setEmoji('➡️');
-
-  return [
-    new ActionRowBuilder().addComponents(type),
-    new ActionRowBuilder().addComponents(duration),
-    new ActionRowBuilder().addComponents(winner),
-    new ActionRowBuilder().addComponents(next)
-  ];
-}
-
-// ================= FORM STEP 2 =================
+// ================= FORM 2 =================
 
 function secondModal() {
   const modal = new ModalBuilder()
     .setCustomId('giveaway:form2')
-    .setTitle('Giveaway Application • 2/2');
+    .setTitle('Giveaway Application • 2/3');
 
-  const winners = new TextInputBuilder()
-    .setCustomId('winners')
-    .setLabel('Number of winners')
-    .setPlaceholder('Example: 1')
-    .setStyle(TextInputStyle.Short)
-    .setMaxLength(3)
-    .setRequired(true);
+  const fields = [
+    [
+      'giveawayType',
+      'Giveaway type',
+      'Normal, weekly, coin, custom, etc.',
+      100
+    ],
+    [
+      'duration',
+      'Duration',
+      'Example: 12 hours, 5 days, 2 weeks',
+      50
+    ],
+    [
+      'winnerMode',
+      'Winner selection method',
+      'Random, most messages, most invites',
+      100
+    ],
+    [
+      'winners',
+      'Number of winners (1-20)',
+      'Example: 1',
+      2
+    ],
+    [
+      'requirements',
+      'Entry requirements',
+      'Write the rules to enter',
+      1000
+    ]
+  ];
 
-  const requirements = new TextInputBuilder()
-    .setCustomId('requirements')
-    .setLabel('Entry requirements')
-    .setPlaceholder('Example: Join server and follow rules.')
+  for (const [id, label, placeholder, max] of fields) {
+    const input = new TextInputBuilder()
+      .setCustomId(id)
+      .setLabel(label)
+      .setPlaceholder(placeholder)
+      .setStyle(
+        id === 'requirements'
+          ? TextInputStyle.Paragraph
+          : TextInputStyle.Short
+      )
+      .setMaxLength(max)
+      .setRequired(true);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(input)
+    );
+  }
+
+  return modal;
+}
+
+// ================= FORM 3 =================
+
+function thirdModal() {
+  const modal = new ModalBuilder()
+    .setCustomId('giveaway:form3')
+    .setTitle('Giveaway Application • 3/3');
+
+  const rules = new TextInputBuilder()
+    .setCustomId('competitionRules')
+    .setLabel('Message / invite competition rules')
+    .setPlaceholder('Example: 100 messages or 10 valid invites')
     .setStyle(TextInputStyle.Paragraph)
     .setMaxLength(1000)
-    .setRequired(true);
+    .setRequired(false);
 
   const image = new TextInputBuilder()
     .setCustomId('image')
@@ -324,25 +398,38 @@ function secondModal() {
     .setMaxLength(500)
     .setRequired(false);
 
+  const extra = new TextInputBuilder()
+    .setCustomId('extra')
+    .setLabel('Extra information (optional)')
+    .setPlaceholder('Anything else people should know')
+    .setStyle(TextInputStyle.Paragraph)
+    .setMaxLength(800)
+    .setRequired(false);
+
   modal.addComponents(
-    new ActionRowBuilder().addComponents(winners),
-    new ActionRowBuilder().addComponents(requirements),
-    new ActionRowBuilder().addComponents(image)
+    new ActionRowBuilder().addComponents(rules),
+    new ActionRowBuilder().addComponents(image),
+    new ActionRowBuilder().addComponents(extra)
   );
 
   return modal;
-  }
+}
+
 // ================= SETUP =================
 
 async function setupGiveawaySystem(client) {
-  const channel = await client.channels.fetch(HOST_CHANNEL_ID).catch(() => null);
+  const channel = await client.channels
+    .fetch(HOST_CHANNEL_ID)
+    .catch(() => null);
 
   if (!channel || !channel.isTextBased()) {
     console.error('Giveaway host channel not found.');
     return;
   }
 
-  const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+  const messages = await channel.messages
+    .fetch({ limit: 20 })
+    .catch(() => null);
 
   let panelMessage = data.panelMessageId
     ? messages?.get(data.panelMessageId)
@@ -385,50 +472,59 @@ async function publishGiveaway(app, client) {
     throw new Error('Giveaway announcements channel not found.');
   }
 
-  const durationMs = {
-    '24 hours': 24 * 60 * 60 * 1000,
-    '3 days': 3 * 24 * 60 * 60 * 1000,
-    '7 days': 7 * 24 * 60 * 60 * 1000,
-    '14 days': 14 * 24 * 60 * 60 * 1000
-  };
+  const duration = app.durationMs || parseDuration(app.duration);
 
-  const duration = durationMs[app.duration] || 7 * 24 * 60 * 60 * 1000;
+  if (!duration) {
+    throw new Error('Invalid giveaway duration.');
+  }
+
   const now = Date.now();
-
   const giveawayId = `${app.id}-${now}`;
+  const engine = getWinnerEngine(app.winnerMode);
 
   const embed = new EmbedBuilder()
     .setColor(0x5865F2)
     .setTitle(`🎁 ${safeText(app.title, 200)}`)
     .setDescription(
-      `${safeText(app.details, 1500)}\n\n` +
+      `${safeText(app.details, 1000)}\n\n` +
       '━━━━━━━━━━━━━━━━━━━━\n' +
-      `🎮 **Game:** ${safeText(app.game, 80)}\n` +
-      `🏆 **Prize:** ${safeText(app.prize, 100)} (${safeText(app.prizeType, 50)})\n` +
-      `👑 **Host:** <@${app.userId}>\n` +
+      `🎮 **Game:** ${safeText(app.game, 100)}\n` +
+      `🏆 **Prize:** ${safeText(app.prize, 150)} (${safeText(app.prizeType, 100)})\n` +
+      `🏷️ **Type:** ${safeText(app.giveawayType, 100)}\n` +
+      `👑 **Host:** <@${app.userId}> (${safeText(app.username, 80)})\n` +
       `👥 **Winners:** ${app.winners}\n` +
-      `🎯 **Winner method:** ${app.winnerMode}\n` +
+      `🎯 **Winner method:** ${safeText(app.winnerMode, 150)}\n` +
       `📋 **Requirements:** ${safeText(app.requirements, 800)}\n` +
+      `💬 **Competition rules:** ${safeText(app.competitionRules, 800)}\n` +
+      `🗒️ **Extra info:** ${safeText(app.extra, 500)}\n` +
       `⏰ **Ends:** <t:${Math.floor((now + duration) / 1000)}:F>\n\n` +
-      'Press **ENTER GIVEAWAY** below to participate.'
+      (
+        engine === 'random'
+          ? 'Press **ENTER GIVEAWAY** below to participate.'
+          : 'Participate by following the competition rules above.'
+      )
     )
     .setFooter({ text: 'Elyx Trading • Good luck!' })
     .setTimestamp(new Date(now));
 
   if (app.imageUrl) embed.setImage(app.imageUrl);
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`giveaway:enter:${giveawayId}`)
-      .setLabel('ENTER GIVEAWAY')
-      .setStyle(ButtonStyle.Success)
-      .setEmoji('🎉')
-  );
+  const components = engine === 'random'
+    ? [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`giveaway:enter:${giveawayId}`)
+            .setLabel('ENTER GIVEAWAY')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('🎉')
+        )
+      ]
+    : [];
 
   const message = await channel.send({
     content: `🎉 <@${app.userId}> is hosting a giveaway! @everyone`,
     embeds: [embed],
-    components: [row],
+    components,
     allowedMentions: {
       parse: ['everyone'],
       users: [app.userId]
@@ -445,6 +541,7 @@ async function publishGiveaway(app, client) {
     title: app.title,
     giveawayType: app.giveawayType,
     winnerMode: app.winnerMode,
+    engine,
     winners: Number(app.winners) || 1,
     startsAt: now,
     endsAt: now + duration,
@@ -454,35 +551,35 @@ async function publishGiveaway(app, client) {
 
   saveData();
   return message;
-}
+  }
 
 // ================= FINISH GIVEAWAY =================
 
 async function finishGiveaway(giveaway, client) {
   if (giveaway.ended) return;
 
-  giveaway.ended = true;
-  saveData();
-
   const channel = await client.channels
     .fetch(giveaway.channelId)
     .catch(() => null);
 
-  if (!channel || !channel.isTextBased()) return;
+  if (!channel || !channel.isTextBased()) {
+    throw new Error('Giveaway channel not found while ending.');
+  }
 
   let winners = [];
 
-  if (giveaway.winnerMode === 'Most eligible messages') {
+  const engine =
+    giveaway.engine || getWinnerEngine(giveaway.winnerMode);
+
+  if (engine === 'messages') {
     const counts = data.messageCounts[giveaway.id] || {};
 
     winners = Object.entries(counts)
-      .filter(([userId, count]) =>
-        count > 0 && !client.users.cache.get(userId)?.bot
-      )
+      .filter(([, count]) => count > 0)
       .sort((a, b) => b[1] - a[1])
       .slice(0, giveaway.winners)
       .map(([userId]) => userId);
-  } else if (giveaway.winnerMode === 'Most valid invites') {
+  } else if (engine === 'invites') {
     const counts = data.inviteCounts[giveaway.id] || {};
 
     winners = Object.entries(counts)
@@ -506,7 +603,10 @@ async function finishGiveaway(giveaway, client) {
     : 'No eligible winners found.';
 
   await channel.send({
-    content: `🏆 **GIVEAWAY ENDED!**\n🎁 **${safeText(giveaway.title, 150)}**\nWinner(s): ${winnerText}`,
+    content:
+      `🏆 **GIVEAWAY ENDED!**\n` +
+      `🎁 **${safeText(giveaway.title, 150)}**\n` +
+      `Winner(s): ${winnerText}`,
     allowedMentions: {
       users: winners
     }
@@ -530,6 +630,8 @@ async function finishGiveaway(giveaway, client) {
     }).catch(() => {});
   }
 
+  giveaway.ended = true;
+  giveaway.endedAt = Date.now();
   saveData();
 }
 
@@ -539,6 +641,7 @@ let timerStarted = false;
 
 function startGiveawayTimer(client) {
   if (timerStarted) return;
+
   timerStarted = true;
 
   setInterval(async () => {
@@ -551,14 +654,16 @@ function startGiveawayTimer(client) {
         }
       }
     }
-  }, 30_000);
+  }, 30000);
 }
 
 // ================= INTERACTIONS =================
 
 async function handleInteraction(interaction, client) {
-  if (!interaction.isButton() && !interaction.isStringSelectMenu() &&
-      !interaction.isModalSubmit()) {
+  if (
+    !interaction.isButton() &&
+    !interaction.isModalSubmit()
+  ) {
     return false;
   }
 
@@ -570,6 +675,7 @@ async function handleInteraction(interaction, client) {
   if (id === 'giveaway:apply' && interaction.isButton()) {
     drafts.set(interaction.user.id, {
       userId: interaction.user.id,
+      username: interaction.user.username,
       guildId: interaction.guildId,
       createdAt: Date.now()
     });
@@ -578,65 +684,48 @@ async function handleInteraction(interaction, client) {
     return true;
   }
 
-  // FIRST FORM SUBMITTED
+  // FORM 1 SUBMITTED
   if (id === 'giveaway:form1' && interaction.isModalSubmit()) {
     const draft = drafts.get(interaction.user.id);
 
     if (!draft) {
       await interaction.reply({
-        content: 'Your application expired. Please press APPLY again.',
+        content: 'Application expired. Press APPLY again.',
         ephemeral: true
       });
       return true;
     }
 
-    draft.game = interaction.fields.getTextInputValue('game');
-    draft.title = interaction.fields.getTextInputValue('title');
-    draft.prize = interaction.fields.getTextInputValue('prize');
-    draft.prizeType = interaction.fields.getTextInputValue('prizeType');
-    draft.details = interaction.fields.getTextInputValue('details');
+    draft.game = interaction.fields.getTextInputValue('game').trim();
+    draft.title = interaction.fields.getTextInputValue('title').trim();
+    draft.prize = interaction.fields.getTextInputValue('prize').trim();
+    draft.prizeType = interaction.fields.getTextInputValue('prizeType').trim();
+    draft.details = interaction.fields.getTextInputValue('details').trim();
 
     drafts.set(interaction.user.id, draft);
 
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('giveaway:openform2')
+        .setLabel('CONTINUE TO STEP 2')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('➡️')
+    );
+
     await interaction.reply({
-      content: 'Choose your giveaway type, duration and winner method, then continue.',
-      components: optionRows(draft),
+      content: '✅ Step 1 saved. Click below to enter your custom giveaway settings.',
+      components: [row],
       ephemeral: true
     });
 
     return true;
   }
 
-  // FORM OPTIONS
-  if (interaction.isStringSelectMenu()) {
-    const draft = drafts.get(interaction.user.id);
-
-    if (!draft) {
+  // OPEN FORM 2
+  if (id === 'giveaway:openform2' && interaction.isButton()) {
+    if (!drafts.has(interaction.user.id)) {
       await interaction.reply({
-        content: 'Your application expired. Press APPLY again.',
-        ephemeral: true
-      });
-      return true;
-    }
-
-    if (id === 'giveaway:type') draft.giveawayType = interaction.values[0];
-    else if (id === 'giveaway:duration') draft.duration = interaction.values[0];
-    else if (id === 'giveaway:winner') draft.winnerMode = interaction.values[0];
-    else return false;
-
-    drafts.set(interaction.user.id, draft);
-
-    await interaction.deferUpdate();
-    return true;
-  }
-
-  // CONTINUE TO SECOND FORM
-  if (id === 'giveaway:continue' && interaction.isButton()) {
-    const draft = drafts.get(interaction.user.id);
-
-    if (!draft || !draft.giveawayType || !draft.duration || !draft.winnerMode) {
-      await interaction.reply({
-        content: 'Please select all three options before continuing.',
+        content: 'Application expired. Press APPLY again.',
         ephemeral: true
       });
       return true;
@@ -646,32 +735,112 @@ async function handleInteraction(interaction, client) {
     return true;
   }
 
-  // SECOND FORM SUBMITTED
+  // FORM 2 SUBMITTED
   if (id === 'giveaway:form2' && interaction.isModalSubmit()) {
     const draft = drafts.get(interaction.user.id);
 
     if (!draft) {
       await interaction.reply({
-        content: 'Your application expired. Press APPLY again.',
+        content: 'Application expired. Press APPLY again.',
         ephemeral: true
       });
       return true;
     }
 
-    const winnersText = interaction.fields.getTextInputValue('winners').trim();
+    draft.giveawayType =
+      interaction.fields.getTextInputValue('giveawayType').trim();
+
+    draft.duration =
+      interaction.fields.getTextInputValue('duration').trim();
+
+    draft.winnerMode =
+      interaction.fields.getTextInputValue('winnerMode').trim();
+
+    const durationMs = parseDuration(draft.duration);
+
+    if (!durationMs) {
+      await interaction.reply({
+        content:
+          '❌ Invalid duration. Examples: `30 minutes`, `12 hours`, `5 days`, `2 weeks`. Maximum is 365 days.',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const winnersText =
+      interaction.fields.getTextInputValue('winners').trim();
+
     const winners = Number(winnersText);
 
     if (!Number.isInteger(winners) || winners < 1 || winners > 20) {
       await interaction.reply({
-        content: 'Number of winners must be between 1 and 20.',
+        content: '❌ Number of winners must be between 1 and 20.',
         ephemeral: true
       });
       return true;
     }
 
+    draft.durationMs = durationMs;
     draft.winners = winners;
-    draft.requirements = interaction.fields.getTextInputValue('requirements');
-    draft.imageUrl = imageUrl(interaction.fields.getTextInputValue('image'));
+    draft.requirements =
+      interaction.fields.getTextInputValue('requirements').trim();
+
+    drafts.set(interaction.user.id, draft);
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('giveaway:openform3')
+        .setLabel('CONTINUE TO STEP 3')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('➡️')
+    );
+
+    await interaction.reply({
+      content:
+        '✅ Step 2 saved. Add competition rules and an optional image in the final step.',
+      components: [row],
+      ephemeral: true
+    });
+
+    return true;
+  }
+
+  // OPEN FORM 3
+  if (id === 'giveaway:openform3' && interaction.isButton()) {
+    if (!drafts.has(interaction.user.id)) {
+      await interaction.reply({
+        content: 'Application expired. Press APPLY again.',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    await interaction.showModal(thirdModal());
+    return true;
+  }
+
+  // FORM 3 SUBMITTED
+  if (id === 'giveaway:form3' && interaction.isModalSubmit()) {
+    const draft = drafts.get(interaction.user.id);
+
+    if (!draft) {
+      await interaction.reply({
+        content: 'Application expired. Press APPLY again.',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    draft.competitionRules =
+      interaction.fields.getTextInputValue('competitionRules').trim();
+
+    draft.imageUrl = imageUrl(
+      interaction.fields.getTextInputValue('image')
+    );
+
+    draft.extra =
+      interaction.fields.getTextInputValue('extra').trim();
+
     draft.status = 'pending';
     draft.createdAt = draft.createdAt || Date.now();
     draft.id = `${interaction.user.id}-${Date.now()}`;
@@ -688,9 +857,10 @@ async function handleInteraction(interaction, client) {
       saveData();
 
       await interaction.reply({
-        content: 'Verification channel not found. Please contact the server owner.',
+        content: 'Verification channel not found. Contact the server owner.',
         ephemeral: true
       });
+
       return true;
     }
 
@@ -708,7 +878,7 @@ async function handleInteraction(interaction, client) {
     drafts.delete(interaction.user.id);
 
     await interaction.reply({
-      content: '✅ Your application has been submitted for owner review.',
+      content: '✅ Application submitted! The owner will review it.',
       ephemeral: true
     });
 
@@ -743,7 +913,11 @@ async function handleInteraction(interaction, client) {
 
       app.status = 'approved';
       app.publishedAt = Date.now();
-      data.approvedUsers = [...new Set([...data.approvedUsers, app.userId])];
+
+      data.approvedUsers = [
+        ...new Set([...data.approvedUsers, app.userId])
+      ];
+
       saveData();
 
       await interaction.message.edit({
@@ -751,17 +925,20 @@ async function handleInteraction(interaction, client) {
         components: [reviewRow(appId, 'approved')]
       });
 
-      const user = await client.users.fetch(app.userId).catch(() => null);
+      const user = await client.users
+        .fetch(app.userId)
+        .catch(() => null);
+
       if (user) {
         await user.send(
-          `✅ Your giveaway **${safeText(app.title, 150)}** has been approved and published!`
+          `✅ Your giveaway **${safeText(app.title, 150)}** was approved and published!`
         ).catch(() => {});
       }
     } catch (error) {
       console.error('Giveaway publish error:', error);
 
       await interaction.followUp({
-        content: 'Publishing failed. Check the bot permissions and announcement channel.',
+        content: 'Publishing failed. Check bot permissions and channel settings.',
         ephemeral: true
       });
     }
@@ -799,7 +976,10 @@ async function handleInteraction(interaction, client) {
       components: [reviewRow(appId, 'denied')]
     });
 
-    const user = await client.users.fetch(app.userId).catch(() => null);
+    const user = await client.users
+      .fetch(app.userId)
+      .catch(() => null);
+
     if (user) {
       await user.send(
         `❌ Your giveaway application **${safeText(app.title, 150)}** was denied.`
@@ -822,9 +1002,11 @@ async function handleInteraction(interaction, client) {
       return true;
     }
 
-    if (giveaway.winnerMode !== 'Random winner') {
+    if (
+      (giveaway.engine || getWinnerEngine(giveaway.winnerMode)) !== 'random'
+    ) {
       await interaction.reply({
-        content: 'This competition selects winners using its message or invite leaderboard.',
+        content: 'This competition uses message or invite tracking.',
         ephemeral: true
       });
       return true;
@@ -862,7 +1044,7 @@ async function handleInteraction(interaction, client) {
 
 // ================= MESSAGE TRACKING =================
 
-async function handleGiveawayMessage(message, client) {
+async function handleGiveawayMessage(message) {
   if (!message.guild || message.author.bot) return;
   if (message.content.trim().length < 3) return;
   if (message.content.startsWith('/')) return;
@@ -876,9 +1058,12 @@ async function handleGiveawayMessage(message, client) {
   if (excludedChannels.includes(message.channel.id)) return;
 
   for (const giveaway of Object.values(data.giveaways)) {
+    const engine =
+      giveaway.engine || getWinnerEngine(giveaway.winnerMode);
+
     if (
       giveaway.ended ||
-      giveaway.winnerMode !== 'Most eligible messages' ||
+      engine !== 'messages' ||
       Date.now() < giveaway.startsAt ||
       Date.now() >= giveaway.endsAt ||
       giveaway.guildId !== message.guild.id
@@ -891,7 +1076,9 @@ async function handleGiveawayMessage(message, client) {
     }
 
     const counts = data.messageCounts[giveaway.id];
-    counts[message.author.id] = (counts[message.author.id] || 0) + 1;
+
+    counts[message.author.id] =
+      (counts[message.author.id] || 0) + 1;
   }
 
   saveData();
@@ -907,7 +1094,10 @@ async function cacheGuildInvites(guild) {
 
     inviteCache.set(
       guild.id,
-      new Map(invites.map(invite => [invite.code, invite.uses || 0]))
+      new Map(invites.map(invite => [
+        invite.code,
+        invite.uses || 0
+      ]))
     );
   } catch (error) {
     console.warn(
@@ -921,16 +1111,22 @@ async function handleMemberJoin(member) {
   if (!member.guild) return;
 
   try {
-    const oldInvites = inviteCache.get(member.guild.id) || new Map();
+    const oldInvites =
+      inviteCache.get(member.guild.id) || new Map();
+
     const newInvites = await member.guild.invites.fetch();
 
     const usedInvite = newInvites.find(invite =>
-      (invite.uses || 0) > (oldInvites.get(invite.code) || 0)
+      (invite.uses || 0) >
+      (oldInvites.get(invite.code) || 0)
     );
 
     inviteCache.set(
       member.guild.id,
-      new Map(newInvites.map(invite => [invite.code, invite.uses || 0]))
+      new Map(newInvites.map(invite => [
+        invite.code,
+        invite.uses || 0
+      ]))
     );
 
     if (!usedInvite || !usedInvite.inviter) return;
@@ -938,9 +1134,12 @@ async function handleMemberJoin(member) {
     const inviterId = usedInvite.inviter.id;
 
     for (const giveaway of Object.values(data.giveaways)) {
+      const engine =
+        giveaway.engine || getWinnerEngine(giveaway.winnerMode);
+
       if (
         giveaway.ended ||
-        giveaway.winnerMode !== 'Most valid invites' ||
+        engine !== 'invites' ||
         Date.now() < giveaway.startsAt ||
         Date.now() >= giveaway.endsAt ||
         giveaway.guildId !== member.guild.id ||
@@ -954,6 +1153,7 @@ async function handleMemberJoin(member) {
       }
 
       const counts = data.inviteCounts[giveaway.id];
+
       counts[inviterId] = (counts[inviterId] || 0) + 1;
     }
 

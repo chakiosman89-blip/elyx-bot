@@ -1,0 +1,106 @@
+const {
+EmbedBuilder,
+ActionRowBuilder,
+ButtonBuilder,
+ButtonStyle,
+Events
+} = require('discord.js');
+
+const fs = require('fs');
+const path = require('path');
+
+const DATA_FILE = path.join(__dirname, 'minecraft-data.json');
+const PREFIX = '-';
+
+const ITEMS = {
+oak_log: { name: 'Oak Log', emoji: '🪵' },
+stick: { name: 'Stick', emoji: '🥢' },
+cobblestone: { name: 'Cobblestone', emoji: '🪨' },
+coal: { name: 'Coal', emoji: '⚫' },
+raw_iron: { name: 'Raw Iron', emoji: '🪙' },
+iron_ingot: { name: 'Iron Ingot', emoji: '🔩' },
+raw_gold: { name: 'Raw Gold', emoji: '🟡' },
+gold_ingot: { name: 'Gold Ingot', emoji: '🥇' },
+diamond: { name: 'Diamond', emoji: '💎' },
+emerald: { name: 'Emerald', emoji: '🟢' },
+redstone: { name: 'Redstone', emoji: '🔴' },
+lapis_lazuli: { name: 'Lapis Lazuli', emoji: '🔵' }
+};
+
+const TOOLS = {
+wooden: { name: 'Wooden Pickaxe', power: 1, durability: 40 },
+stone: { name: 'Stone Pickaxe', power: 2, durability: 90 },
+iron: { name: 'Iron Pickaxe', power: 3, durability: 180 },
+gold: { name: 'Golden Pickaxe', power: 4, durability: 55 },
+diamond: { name: 'Diamond Pickaxe', power: 5, durability: 400 }
+};
+
+const BLOCKS = {
+stone: {
+name: 'Stone',
+emoji: '🪨',
+hp: 3,
+drops: [
+['cobblestone', 1, 3, 100],
+['coal', 1, 2, 18],
+['raw_iron', 1, 2, 8],
+['raw_gold', 1, 1, 0.5],
+['diamond', 1, 1, 0.15],
+['emerald', 1, 1, 0.2],
+['redstone', 1, 2, 2],
+['lapis_lazuli', 1, 2, 1.5]
+]
+},
+deepslate: {
+name: 'Deepslate',
+emoji: '⬛',
+hp: 5,
+drops: [
+['cobblestone', 1, 3, 100],
+['coal', 1, 2, 15],
+['raw_iron', 1, 2, 7],
+['raw_gold', 1, 1, 0.8],
+['diamond', 1, 1, 0.25],
+['emerald', 1, 1, 0.2],
+['redstone', 1, 2, 3],
+['lapis_lazuli', 1, 2, 2]
+]
+},
+coal_ore: {
+name: 'Coal Ore',
+emoji: '⚫',
+hp: 4,
+drops: [
+['coal', 2, 4, 100],
+['cobblestone', 1, 2, 100]
+]
+},
+iron_ore: {
+name: 'Iron Ore',
+emoji: '🪙',
+hp: 5,
+drops: [
+['raw_iron', 2, 4, 100],
+['cobblestone', 1, 2, 100]
+]
+}
+};
+
+const RECIPES = {
+stone: {
+previous: 'wooden',
+materials: { cobblestone: 16, stick: 4 }
+},
+iron: {
+previous: 'stone',
+materials: { cobblestone: 24, iron_ingot: 8, stick: 4 }
+},
+gold: {
+previous: 'iron',
+materials: { cobblestone: 32, gold_ingot: 12, stick: 4 }
+},
+diamond: {
+previous: 'gold',
+materials: {
+cobblestone: 48,
+iron_ingot: 16,

@@ -1,112 +1,144 @@
 const {
-Client,
-GatewayIntentBits,
-Events
+  Client,
+  GatewayIntentBits,
+  Events
 } = require('discord.js');
 
 // Existing Giveaway system — keep giveaway.js unchanged
 const giveaway = require('./giveaway');
 
-// Minecraft game
+// Minecraft game system
 const registerMinecraft = require('./minecraft');
 
 // ================= CLIENT =================
 
 const client = new Client({
-intents: [
-GatewayIntentBits.Guilds,
-GatewayIntentBits.GuildMembers,
-GatewayIntentBits.GuildMessages,
-GatewayIntentBits.MessageContent
-]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-// Register Minecraft commands and buttons
-registerMinecraft(client);
+// ================= MINECRAFT REGISTRATION =================
+
+try {
+  registerMinecraft(client);
+  console.log('Minecraft commands registered.');
+} catch (error) {
+  console.error('Minecraft registration error:', error);
+  process.exit(1);
+}
 
 // ================= BOT READY =================
 
 client.once(Events.ClientReady, async (bot) => {
-console.log("Elyx bot online: ${bot.user.tag}");
-console.log('Minecraft Mining + Giveaway system starting...');
+  console.log(`Elyx bot online: ${bot.user.tag}`);
+  console.log('Minecraft + Giveaway systems starting...');
 
-try {
-// Set up existing giveaway application panel
-await giveaway.setupGiveawaySystem(client);
+  try {
+    // Initialize existing Giveaway system
+    await giveaway.setupGiveawaySystem(client);
 
-// Start existing giveaway ending timer
-giveaway.startGiveawayTimer(client);
+    // Start existing Giveaway ending timer
+    giveaway.startGiveawayTimer(client);
 
-// Cache server invites for the existing giveaway system
-for (const guild of client.guilds.cache.values()) {
-  await giveaway.cacheGuildInvites(guild);
-}
+    // Cache server invites for Giveaway tracking
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        await giveaway.cacheGuildInvites(guild);
+      } catch (error) {
+        console.error(
+          `Invite cache failed for ${guild.name}:`,
+          error.message
+        );
+      }
+    }
 
-console.log('Giveaway system initialized.');
-console.log('Minecraft Mining system initialized.');
+    console.log('Giveaway system initialized.');
+    console.log('Minecraft system initialized.');
+    console.log('All systems are online.');
 
-} catch (error) {
-console.error('Startup error:', error);
-}
+  } catch (error) {
+    console.error('Startup initialization error:', error);
+  }
 });
 
-// ================= GIVEAWAY INTERACTIONS =================
+// ================= INTERACTIONS =================
 
 client.on(Events.InteractionCreate, async (interaction) => {
-try {
-const handled = await giveaway.handleInteraction(
-interaction,
-client
-);
+  try {
+    // Let the existing Giveaway system handle its interactions
+    const handled = await giveaway.handleInteraction(
+      interaction,
+      client
+    );
 
-if (handled) return;
+    if (handled) return;
 
-} catch (error) {
-console.error('Giveaway interaction error:', error);
+    // Minecraft buttons and interactions are handled
+    // by the registered Minecraft module.
+  } catch (error) {
+    console.error('Interaction error:', error);
 
-if (interaction.isRepliable()) {
-  const reply = {
-    content: 'Giveaway action failed. Please try again.',
-    ephemeral: true
-  };
+    if (!interaction.isRepliable()) return;
 
-  if (interaction.replied || interaction.deferred) {
-    await interaction.followUp(reply).catch(() => {});
-  } else {
-    await interaction.reply(reply).catch(() => {});
+    const reply = {
+      content: 'Something went wrong. Please try again.',
+      ephemeral: true
+    };
+
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp(reply).catch(() => {});
+    } else {
+      await interaction.reply(reply).catch(() => {});
+    }
   }
-}
-
-}
 });
 
-// ================= GIVEAWAY MESSAGE TRACKING =================
+// ================= MESSAGE TRACKING =================
 
 client.on(Events.MessageCreate, async (message) => {
-try {
-await giveaway.handleGiveawayMessage(message, client);
-} catch (error) {
-console.error('Giveaway message tracking error:', error);
-}
+  try {
+    await giveaway.handleGiveawayMessage(message, client);
+  } catch (error) {
+    console.error('Giveaway message tracking error:', error);
+  }
 });
 
-// ================= GIVEAWAY INVITE TRACKING =================
+// ================= MEMBER JOIN / INVITE TRACKING =================
 
 client.on(Events.GuildMemberAdd, async (member) => {
-try {
-await giveaway.handleMemberJoin(member);
-} catch (error) {
-console.error('Giveaway invite tracking error:', error);
-}
+  try {
+    await giveaway.handleMemberJoin(member);
+  } catch (error) {
+    console.error('Giveaway invite tracking error:', error);
+  }
+});
+
+// ================= ERROR HANDLING =================
+
+client.on(Events.Error, (error) => {
+  console.error('Discord client error:', error);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled promise rejection:', error);
 });
 
 // ================= LOGIN =================
 
-if (!process.env.DISCORD_TOKEN) {
-console.error('ERROR: DISCORD_TOKEN is missing from hosting environment.');
-process.exit(1);
+const token = process.env.DISCORD_TOKEN;
+
+if (!token) {
+  console.error(
+    'ERROR: DISCORD_TOKEN is missing from hosting environment.'
+  );
+  process.exit(1);
 }
 
-client.login(process.env.DISCORD_TOKEN).catch((error) => {
-console.error('Bot login failed:', error);
+client.login(token).catch((error) => {
+  console.error('Bot login failed:', error);
+  process.exit(1);
 });

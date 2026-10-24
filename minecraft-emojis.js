@@ -1,332 +1,207 @@
-const {
-  PermissionFlagsBits
-} = require('discord.js');
-
-// ================= CONFIG =================
-
 const OWNER_ID = '1535048066875527198';
 
-const PREFIX = '-';
+const TEXTURE_BASE =
+    'https://project-crafting.github.io/minecraft-auto-updated-textures-api/items/';
 
-const BASE_URL =
-  'https://project-crafting.github.io/minecraft-auto-updated-textures-api/items/';
-
-// ================= MINECRAFT ITEMS =================
-// Emoji names Minecraft item IDs ke matching hain.
-
+// Game ke items aur unke Minecraft texture links.
+// IDs ko minecraft.js ke item IDs ke saath match rakha gaya hai.
 const ITEMS = [
-  // Building blocks
-  'stone',
-  'cobblestone',
-  'deepslate',
-  'dirt',
-  'grass_block',
-  'sand',
-  'gravel',
-  'glass',
-  'bricks',
-  'obsidian',
-  'bedrock',
+    { id: 'oak_log', name: 'Oak Log', texture: 'oak_log', fallback: '🪵' },
+    { id: 'oak_planks', name: 'Oak Planks', texture: 'oak_planks', fallback: '🪵' },
+    { id: 'stick', name: 'Stick', texture: 'stick', fallback: '🥢' },
+    { id: 'cobblestone', name: 'Cobblestone', texture: 'cobblestone', fallback: '🪨' },
+    { id: 'stone', name: 'Stone', texture: 'stone', fallback: '🪨' },
+    { id: 'coal', name: 'Coal', texture: 'coal', fallback: '⚫' },
+    { id: 'raw_iron', name: 'Raw Iron', texture: 'raw_iron', fallback: '🪨' },
+    { id: 'iron_ingot', name: 'Iron Ingot', texture: 'iron_ingot', fallback: '🔩' },
+    { id: 'raw_gold', name: 'Raw Gold', texture: 'raw_gold', fallback: '🟡' },
+    { id: 'gold_ingot', name: 'Gold Ingot', texture: 'gold_ingot', fallback: '🪙' },
+    { id: 'diamond', name: 'Diamond', texture: 'diamond', fallback: '💎' },
+    { id: 'emerald', name: 'Emerald', texture: 'emerald', fallback: '💚' },
+    { id: 'redstone', name: 'Redstone Dust', texture: 'redstone', fallback: '🔴' },
+    { id: 'lapis_lazuli', name: 'Lapis Lazuli', texture: 'lapis_lazuli', fallback: '🔵' },
+    { id: 'crafting_table', name: 'Crafting Table', texture: 'crafting_table', fallback: '🪵' },
+    { id: 'furnace', name: 'Furnace', texture: 'furnace', fallback: '🔥' },
+    { id: 'bread', name: 'Bread', texture: 'bread', fallback: '🍞' },
+    { id: 'wheat', name: 'Wheat', texture: 'wheat', fallback: '🌾' },
 
-  // Wood
-  'oak_log',
-  'oak_planks',
-  'oak_sapling',
-  'stick',
-  'crafting_table',
-  'chest',
-  'barrel',
+    { id: 'coal_ore', name: 'Coal Ore', texture: 'coal_ore', fallback: '🪨' },
+    { id: 'iron_ore', name: 'Iron Ore', texture: 'iron_ore', fallback: '🪨' },
+    { id: 'gold_ore', name: 'Gold Ore', texture: 'gold_ore', fallback: '🪨' },
+    { id: 'diamond_ore', name: 'Diamond Ore', texture: 'diamond_ore', fallback: '💎' },
+    { id: 'emerald_ore', name: 'Emerald Ore', texture: 'emerald_ore', fallback: '💚' },
 
-  // Ores and minerals
-  'coal',
-  'raw_iron',
-  'iron_ingot',
-  'raw_gold',
-  'gold_ingot',
-  'diamond',
-  'emerald',
-  'redstone',
-  'lapis_lazuli',
-  'raw_copper',
-  'copper_ingot',
-  'netherite_ingot',
-  'quartz',
-  'amethyst_shard',
-
-  // Tools
-  'wooden_pickaxe',
-  'stone_pickaxe',
-  'iron_pickaxe',
-  'golden_pickaxe',
-  'diamond_pickaxe',
-  'netherite_pickaxe',
-
-  'wooden_axe',
-  'stone_axe',
-  'iron_axe',
-  'golden_axe',
-  'diamond_axe',
-  'netherite_axe',
-
-  'wooden_shovel',
-  'stone_shovel',
-  'iron_shovel',
-  'golden_shovel',
-  'diamond_shovel',
-  'netherite_shovel',
-
-  'wooden_hoe',
-  'stone_hoe',
-  'iron_hoe',
-  'golden_hoe',
-  'diamond_hoe',
-  'netherite_hoe',
-
-  // Weapons
-  'wooden_sword',
-  'stone_sword',
-  'iron_sword',
-  'golden_sword',
-  'diamond_sword',
-  'netherite_sword',
-
-  // Armour
-  'leather_helmet',
-  'iron_helmet',
-  'golden_helmet',
-  'diamond_helmet',
-  'netherite_helmet',
-
-  'iron_chestplate',
-  'diamond_chestplate',
-  'netherite_chestplate',
-
-  'iron_leggings',
-  'diamond_leggings',
-  'netherite_leggings',
-
-  'iron_boots',
-  'diamond_boots',
-  'netherite_boots',
-
-  // Crafting and furnace
-  'furnace',
-  'blast_furnace',
-  'smoker',
-  'anvil',
-  'stonecutter',
-  'grindstone',
-  'smithing_table',
-  'enchanting_table',
-
-  // Useful materials
-  'string',
-  'feather',
-  'leather',
-  'paper',
-  'book',
-  'bone',
-  'gunpowder',
-  'flint',
-  'brick',
-  'iron_nugget',
-  'gold_nugget',
-
-  // Food
-  'bread',
-  'apple',
-  'golden_apple',
-  'carrot',
-  'potato',
-  'baked_potato',
-  'cooked_beef',
-  'cooked_porkchop',
-
-  // Nether
-  'netherrack',
-  'nether_brick',
-  'blaze_rod',
-  'blaze_powder',
-  'glowstone_dust',
-  'ender_pearl',
-  'ender_eye',
-
-  // Other useful items
-  'bucket',
-  'water_bucket',
-  'lava_bucket',
-  'torch',
-  'ladder',
-  'arrow',
-  'bow',
-  'shield',
-  'fishing_rod',
-  'flint_and_steel',
-  'experience_bottle'
+    { id: 'wooden_pickaxe', name: 'Wooden Pickaxe', texture: 'wooden_pickaxe', fallback: '⛏️' },
+    { id: 'stone_pickaxe', name: 'Stone Pickaxe', texture: 'stone_pickaxe', fallback: '⛏️' },
+    { id: 'iron_pickaxe', name: 'Iron Pickaxe', texture: 'iron_pickaxe', fallback: '⛏️' },
+    { id: 'golden_pickaxe', name: 'Golden Pickaxe', texture: 'golden_pickaxe', fallback: '⛏️' },
+    { id: 'diamond_pickaxe', name: 'Diamond Pickaxe', texture: 'diamond_pickaxe', fallback: '⛏️' }
 ];
 
-// ================= HELPERS =================
-
-function wait(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function normalize(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/^minecraft:/, '')
+        .replace(/[^a-z0-9]/g, '');
 }
 
-function getMinecraftEmoji(guild, itemName) {
-  const emoji = guild.emojis.cache.find(
-    item => item.name === itemName
-  );
+function getItem(value) {
+    const key = normalize(value);
 
-  return emoji
-    ? `<:${emoji.name}:${emoji.id}>`
-    : '📦';
+    return ITEMS.find(item =>
+        normalize(item.id) === key ||
+        normalize(item.name) === key ||
+        normalize(item.texture) === key
+    );
 }
 
-function getItemImageUrl(itemName) {
-  return `${BASE_URL}${encodeURIComponent(itemName)}.png`;
+function textureUrl(item) {
+    return `${TEXTURE_BASE}${item.texture}.png`;
 }
-
-// ================= REGISTER SYSTEM =================
 
 module.exports = function registerMinecraftEmojis(client) {
+    // Used by minecraft.js when displaying inventory and drops.
+    client.minecraftEmoji = function (guild, itemName) {
+        const item = getItem(itemName);
 
-  // Available to other Minecraft modules.
-  client.minecraftEmoji = (guild, itemName) => {
-    return getMinecraftEmoji(guild, itemName);
-  };
-
-  client.minecraftItemNames = ITEMS;
-
-  // ================= SETUP COMMAND =================
-
-  client.on('messageCreate', async message => {
-    if (message.author.bot || !message.guild) return;
-
-    if (message.content.trim() !== `${PREFIX}mcsetup`) return;
-
-    if (message.author.id !== OWNER_ID) {
-      return message.reply(
-        '❌ Only the bot owner can run Minecraft emoji setup.'
-      );
-    }
-
-    const me = message.guild.members.me;
-
-    if (!me) {
-      return message.reply(
-        '❌ Bot server member information is unavailable.'
-      );
-    }
-
-    if (!me.permissions.has(
-      PermissionFlagsBits.ManageEmojisAndStickers
-    )) {
-      return message.reply(
-        '❌ Give the bot **Manage Emojis and Stickers** permission.'
-      );
-    }
-
-    const status = await message.reply(
-      '⛏️ **ELYX MINECRAFT EMOJI SETUP**\n' +
-      'Preparing Minecraft item icons...\n\n' +
-      '⏳ Please wait.'
-    );
-
-    let created = 0;
-    let skipped = 0;
-    let failed = 0;
-
-    const failedItems = [];
-
-    for (const name of ITEMS) {
-
-      // Refresh cache to detect newly created emojis.
-      await message.guild.emojis.fetch().catch(() => {});
-
-      const existing = message.guild.emojis.cache.find(
-        emoji => emoji.name === name
-      );
-
-      if (existing) {
-        skipped++;
-        continue;
-      }
-
-      try {
-        const response = await fetch(getItemImageUrl(name));
-
-        if (!response.ok) {
-          failed++;
-          failedItems.push(`${name} (image unavailable)`);
-          continue;
+        if (!item || !guild) {
+            return item ? item.fallback : '📦';
         }
 
-        const imageBuffer = Buffer.from(
-          await response.arrayBuffer()
+        const emojiName = `mc_${item.id}`;
+        const existing = guild.emojis.cache.find(
+            emoji => emoji.name === emojiName
         );
 
-        if (!imageBuffer.length) {
-          failed++;
-          failedItems.push(`${name} (empty image)`);
-          continue;
+        if (existing) {
+            return existing.toString();
         }
 
-        await message.guild.emojis.create({
-          attachment: imageBuffer,
-          name
+        return item.fallback;
+    };
+
+    client.minecraftItemNames = ITEMS.map(item => item.id);
+
+    // Register the custom emoji creation command.
+    client.on('messageCreate', async message => {
+        if (!message.guild || message.author.bot) return;
+        if (message.content.trim() !== '-mcsetup') return;
+
+        if (message.author.id !== OWNER_ID) {
+            await message.reply('❌ Only the bot owner can run this command.');
+            return;
+        }
+
+        const guild = message.guild;
+
+        if (!guild.members.me?.permissions.has('ManageGuildExpressions')) {
+            await message.reply(
+                '❌ Bot ko **Manage Expressions** permission do, phir `-mcsetup` chalao.'
+            );
+            return;
+        }
+
+        const status = await message.reply(
+            '⏳ Minecraft textures load ho rahe hain. Please wait...'
+        );
+
+        let created = 0;
+        let skipped = 0;
+        let failed = 0;
+
+        for (const item of ITEMS) {
+            const emojiName = `mc_${item.id}`;
+
+            const exists = guild.emojis.cache.find(
+                emoji => emoji.name === emojiName
+            );
+
+            if (exists) {
+                skipped++;
+                continue;
+            }
+
+            try {
+                const response = await fetch(textureUrl(item), {
+                    signal: AbortSignal.timeout(12000)
+                });
+
+                if (!response.ok) {
+                    failed++;
+                    console.log(
+                        `[Minecraft Emojis] Texture unavailable: ${item.id} (${response.status})`
+                    );
+                    continue;
+                }
+
+                const contentType = response.headers.get('content-type') || '';
+
+                if (!contentType.includes('image/')) {
+                    failed++;
+                    console.log(
+                        `[Minecraft Emojis] Not an image: ${item.id}`
+                    );
+                    continue;
+                }
+
+                const buffer = Buffer.from(await response.arrayBuffer());
+
+                if (!buffer.length || buffer.length > 256 * 1024) {
+                    failed++;
+                    console.log(
+                        `[Minecraft Emojis] Invalid image size: ${item.id}`
+                    );
+                    continue;
+                }
+
+                await guild.emojis.create({
+                    attachment: buffer,
+                    name: emojiName,
+                    reason: `Minecraft item texture: ${item.name}`
+                });
+
+                created++;
+
+                console.log(
+                    `[Minecraft Emojis] Created ${emojiName}`
+                );
+
+                // Slow down requests to reduce rate-limit problems.
+                await new Promise(resolve => setTimeout(resolve, 1200));
+            } catch (error) {
+                failed++;
+
+                console.log(
+                    `[Minecraft Emojis] Failed ${item.id}: ${error.message}`
+                );
+
+                // Permission/emoji-limit errors usually affect later items too.
+                if (
+                    error.code === 30008 ||
+                    error.code === 50013
+                ) {
+                    console.log(
+                        '[Minecraft Emojis] Emoji limit or permission reached.'
+                    );
+                    break;
+                }
+            }
+        }
+
+        await status.edit({
+            content: [
+                '## ⛏️ Minecraft Emoji Setup',
+                `✅ Created: **${created}**`,
+                `⏭️ Already existed: **${skipped}**`,
+                `❌ Failed: **${failed}**`,
+                '',
+                'Agar failed count zyada hai, Current Run logs check karo.',
+                'Server emoji limit poori ho gayi ho toh sab items register nahi ho payenge.'
+            ].join('\n')
         });
+    });
 
-        created++;
-
-      } catch (error) {
-        failed++;
-        failedItems.push(`${name} (${error.message})`);
-
-        console.error(
-          `[Minecraft Emoji] ${name}:`,
-          error.message
-        );
-      }
-
-      // Avoid sending requests too quickly.
-      await wait(350);
-
-      // Update progress periodically.
-      const completed = created + skipped + failed;
-
-      if (completed % 10 === 0) {
-        await status.edit(
-          `⛏️ **ELYX MINECRAFT EMOJI SETUP**\n\n` +
-          `📊 Progress: ${completed}/${ITEMS.length}\n` +
-          `✅ Created: ${created}\n` +
-          `♻️ Already existed: ${skipped}\n` +
-          `❌ Failed: ${failed}`
-        ).catch(() => {});
-      }
-    }
-
-    const report = [
-      '⛏️ **ELYX MINECRAFT EMOJI SETUP COMPLETE**',
-      '',
-      `📦 Items checked: **${ITEMS.length}**`,
-      `✅ Created: **${created}**`,
-      `♻️ Already existed: **${skipped}**`,
-      `❌ Failed: **${failed}**`,
-      '',
-      `💎 Diamond: ${getMinecraftEmoji(message.guild, 'diamond')}`,
-      `⛏️ Pickaxe: ${getMinecraftEmoji(message.guild, 'diamond_pickaxe')}`,
-      `🪵 Oak Log: ${getMinecraftEmoji(message.guild, 'oak_log')}`
-    ];
-
-    if (failedItems.length) {
-      report.push(
-        '',
-        '**Failed items (first 15):**',
-        failedItems.slice(0, 15).map(
-          item => `• \`${item}\``
-        ).join('\n')
-      );
-    }
-
-    await status.edit(report.join('\n'));
-  });
+    console.log(
+        `[Minecraft Emojis] System registered: ${ITEMS.length} item textures.`
+    );
 };

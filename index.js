@@ -4,11 +4,15 @@ const {
   Events
 } = require('discord.js');
 
-// Existing Giveaway system — keep giveaway.js unchanged
+// ================= EXISTING GIVEAWAY =================
+// giveaway.js ko change nahi karna.
+
 const giveaway = require('./giveaway');
 
-// Minecraft game system
+// ================= MINECRAFT SYSTEMS =================
+
 const registerMinecraft = require('./minecraft');
+const registerMinecraftEmojis = require('./minecraft-emojis');
 
 // ================= CLIENT =================
 
@@ -21,13 +25,17 @@ const client = new Client({
   ]
 });
 
-// ================= MINECRAFT REGISTRATION =================
+// ================= REGISTER SYSTEMS =================
 
 try {
   registerMinecraft(client);
-  console.log('Minecraft commands registered.');
+  console.log('Minecraft gameplay registered.');
+
+  registerMinecraftEmojis(client);
+  console.log('Minecraft emoji system registered.');
+
 } catch (error) {
-  console.error('Minecraft registration error:', error);
+  console.error('System registration failed:', error);
   process.exit(1);
 }
 
@@ -35,16 +43,15 @@ try {
 
 client.once(Events.ClientReady, async (bot) => {
   console.log(`Elyx bot online: ${bot.user.tag}`);
-  console.log('Minecraft + Giveaway systems starting...');
+  console.log('Initializing Minecraft and Giveaway systems...');
 
   try {
-    // Initialize existing Giveaway system
+    // Existing Giveaway system
     await giveaway.setupGiveawaySystem(client);
 
-    // Start existing Giveaway ending timer
     giveaway.startGiveawayTimer(client);
 
-    // Cache server invites for Giveaway tracking
+    // Cache invites for Giveaway tracking
     for (const guild of client.guilds.cache.values()) {
       try {
         await giveaway.cacheGuildInvites(guild);
@@ -58,6 +65,7 @@ client.once(Events.ClientReady, async (bot) => {
 
     console.log('Giveaway system initialized.');
     console.log('Minecraft system initialized.');
+    console.log('Minecraft emoji system initialized.');
     console.log('All systems are online.');
 
   } catch (error) {
@@ -69,7 +77,7 @@ client.once(Events.ClientReady, async (bot) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    // Let the existing Giveaway system handle its interactions
+    // Existing Giveaway interaction handling
     const handled = await giveaway.handleInteraction(
       interaction,
       client
@@ -77,8 +85,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (handled) return;
 
-    // Minecraft buttons and interactions are handled
-    // by the registered Minecraft module.
+    // Minecraft interactions are handled by minecraft.js.
+
   } catch (error) {
     console.error('Interaction error:', error);
 
@@ -117,14 +125,20 @@ client.on(Events.GuildMemberAdd, async (member) => {
   }
 });
 
-// ================= ERROR HANDLING =================
+// ================= DISCORD CLIENT ERRORS =================
 
 client.on(Events.Error, (error) => {
   console.error('Discord client error:', error);
 });
 
+// ================= PROCESS ERRORS =================
+
 process.on('unhandledRejection', (error) => {
   console.error('Unhandled promise rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
 });
 
 // ================= LOGIN =================
@@ -135,6 +149,7 @@ if (!token) {
   console.error(
     'ERROR: DISCORD_TOKEN is missing from hosting environment.'
   );
+
   process.exit(1);
 }
 

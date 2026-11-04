@@ -8,6 +8,8 @@ const {
 } = require('discord.js');
 
 const { handleEconomy } = require('./economy');
+const { handleGames } = require('./games');
+const { addXP } = require('./levels');
 
 const client = new Client({
     intents: [
@@ -30,7 +32,9 @@ const COLORS = [
 ];
 
 function randomColor() {
-    return COLORS[Math.floor(Math.random() * COLORS.length)];
+    return COLORS[
+        Math.floor(Math.random() * COLORS.length)
+    ];
 }
 
 function createEmbed(title, description) {
@@ -54,7 +58,17 @@ client.once('ready', () => {
 
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
-    if (!message.content.startsWith(PREFIX)) return;
+
+    // Normal messages se XP
+    if (!message.content.startsWith(PREFIX)) {
+        try {
+            addXP(message);
+        } catch (error) {
+            console.error('XP Error:', error);
+        }
+
+        return;
+    }
 
     const args = message.content
         .slice(PREFIX.length)
@@ -63,7 +77,11 @@ client.on('messageCreate', async message => {
 
     const command = args.shift()?.toLowerCase();
 
+    if (!command) return;
+
     try {
+
+        // ECONOMY COMMANDS
         const economyCommands = [
             'wallet',
             'daily',
@@ -74,6 +92,18 @@ client.on('messageCreate', async message => {
             return await handleEconomy(message, command);
         }
 
+        // GAME COMMANDS
+        const gameCommands = [
+            'games',
+            'guess',
+            'quiz'
+        ];
+
+        if (gameCommands.includes(command)) {
+            return await handleGames(message, command);
+        }
+
+        // FORTUNE COMMAND
         if (command === 'fortune') {
             return message.reply({
                 embeds: [
@@ -82,28 +112,33 @@ client.on('messageCreate', async message => {
                         'Welcome to ELYX TRADING!\n\n' +
                         '💎 Economy System\n' +
                         '🎁 Daily Rewards\n' +
-                        '🏆 Player Profiles\n\n' +
-                        'More features coming soon!'
+                        '🏆 Player Profiles\n' +
+                        '🎮 Interactive Games\n' +
+                        '⭐ Level System\n\n' +
+                        'Your adventure starts here!'
                     )
                 ]
             });
         }
 
+        // PING COMMAND
         if (command === 'ping') {
             return message.reply({
                 embeds: [
                     createEmbed(
                         '⚡ ELYX CONNECTION',
-                        `Latency: ${client.ws.ping}ms`
+                        `Latency: **${client.ws.ping}ms**`
                     )
                 ]
             });
         }
 
     } catch (error) {
-        console.error(error);
+        console.error('Command Error:', error);
 
-        message.reply('Something went wrong. Please try again.');
+        message.reply({
+            content: 'Something went wrong. Please try again.'
+        }).catch(() => {});
     }
 });
 

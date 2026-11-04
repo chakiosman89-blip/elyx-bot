@@ -7,6 +7,8 @@ const {
     ActivityType
 } = require('discord.js');
 
+const { handleEconomy } = require('./economy');
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -17,7 +19,7 @@ const client = new Client({
 
 const PREFIX = '-';
 
-const rainbowColors = [
+const COLORS = [
     0xFF1744,
     0xFF9100,
     0xFFEA00,
@@ -28,9 +30,7 @@ const rainbowColors = [
 ];
 
 function randomColor() {
-    return rainbowColors[
-        Math.floor(Math.random() * rainbowColors.length)
-    ];
+    return COLORS[Math.floor(Math.random() * COLORS.length)];
 }
 
 function createEmbed(title, description) {
@@ -39,33 +39,51 @@ function createEmbed(title, description) {
         .setTitle(title)
         .setDescription(description)
         .setFooter({
-            text: '🌈 ELYX TRADING • FORTUNE'
+            text: 'ELYX TRADING • FORTUNE'
         })
         .setTimestamp();
 }
 
 client.once('ready', () => {
-    console.log(`🌈 ${client.user.tag} is online!`);
+    console.log(`ELYX ONLINE: ${client.user.tag}`);
 
-    client.user.setActivity('ELYX FORTUNE', {
+    client.user.setActivity('ELYX TRADING', {
         type: ActivityType.Playing
     });
 });
 
-client.on('messageCreate', async (message) => {
+client.on('messageCreate', async message => {
     if (message.author.bot) return;
     if (!message.content.startsWith(PREFIX)) return;
 
-    const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+    const args = message.content
+        .slice(PREFIX.length)
+        .trim()
+        .split(/ +/);
+
     const command = args.shift()?.toLowerCase();
 
     try {
+        const economyCommands = [
+            'wallet',
+            'daily',
+            'profile'
+        ];
+
+        if (economyCommands.includes(command)) {
+            return await handleEconomy(message, command);
+        }
+
         if (command === 'fortune') {
             return message.reply({
                 embeds: [
                     createEmbed(
                         '🌈 ELYX FORTUNE',
-                        'Welcome to ELYX TRADING!\n\nGaming system is online.\n\n🎁 Rewards\n💎 Treasures\n🏆 Achievements'
+                        'Welcome to ELYX TRADING!\n\n' +
+                        '💎 Economy System\n' +
+                        '🎁 Daily Rewards\n' +
+                        '🏆 Player Profiles\n\n' +
+                        'More features coming soon!'
                     )
                 ]
             });
@@ -76,14 +94,16 @@ client.on('messageCreate', async (message) => {
                 embeds: [
                     createEmbed(
                         '⚡ ELYX CONNECTION',
-                        `Bot latency: ${client.ws.ping}ms`
+                        `Latency: ${client.ws.ping}ms`
                     )
                 ]
             });
         }
 
     } catch (error) {
-        console.error('Command error:', error);
+        console.error(error);
+
+        message.reply('Something went wrong. Please try again.');
     }
 });
 

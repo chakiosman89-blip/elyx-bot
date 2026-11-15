@@ -1,697 +1,308 @@
 import os
-import re
 import json
-import glob
-import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
-
+import aiohttp
 import discord
-import requests
-from discord.ext import commands, tasks
-from dotenv import load_dotenv
+from discord.ext import tasks
 
-load_dotenv()
-
-# ==========================================
-# 🌈 ELYX TRADING - CONFIGURATION
-# ==========================================
-
-BOT_TOKEN = os.getenv("DISCORD_TOKEN")
-
-GITHUB_USER = os.getenv("GITHUB_USER", "chakiosman89-blip")
-REPO_NAME = os.getenv("REPO_NAME", "elyx-bot")
-GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
-
-DATA_FOLDER = Path("data")
-
-GITHUB_API = (
-    f"https://api.github.com/repos/"
-    f"{GITHUB_USER}/{REPO_NAME}/contents/data"
-    f"?ref={GITHUB_BRANCH}"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
-
-SYNC_INTERVAL = 5
-
-logging.basicConfig(level=logging.INFO)
-
-logger = logging.getLogger("ELYX TRADING")
-
-
-# ==========================================
-# DISCORD SETUP
-# ==========================================
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(
-    command_prefix=commands.when_mentioned,
-    intents=intents,
-    help_command=None
-)
-
-sync_lock = asyncio.Lock()
-
-
-# ==========================================
-# 🌈 ELYX BRANDING
-# ==========================================
-
-def create_embed(title, description):
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        colour=discord.Colour.from_rgb(120, 80, 255)
-    )
-
-    embed.set_footer(
-        text="E L Y X  T R A D I N G  •  SKYBLOCK MARKET"
-    )
-
-    return embed
-
-
-# ==========================================
-# DATA FILE SYSTEM
-# ==========================================
-
-def load_all_items():
-
-    DATA_FOLDER.mkdir(exist_ok=True)
-
-    all_items = []
-
-    files = glob.glob("data/*.json")
-
-    for filename in files:
-
-        try:
-
-            with open(filename, "r", encoding="utf-8") as file:
-                data = json.load(file)
-
-            if isinstance(data, list):
-                rows = data
-
-            elif isinstance(data, dict):
-                rows = data.get("items", [])
-
-            else:
-                continue
-
-            for item in rows:
-
-                if not isinstance(item, dict):
-                    continue
-
-                if not item.get("name"):
-                    continue
-
-                item = item.copy()
-
-                item["_file"] = Path(filename).stem
-
-                all_items.append(item)
-
-        except Exception as error:
-
-            logger.error(
-                f"JSON Error: {filename} | {error}"
-            )
-
-    return all_items
-
-
-# ==========================================
-# SMART SEARCH SYSTEM
-# ==========================================
-
-def clean_query(query):
-
-    query = query.lower()
-
-    query = re.sub(
-        r"<@!?\d+>",
-        "",
-        query
-    )
-
-    ignored = {
-        "de", "ki", "ka", "ke", "bata",
-        "value", "valu", "price", "rate",
-        "kitni", "kitna", "hai", "h",
-        "please", "plz", "batao"
-    }
-
-    words = query.split()
-
-    words = [
-        word for word in words
-        if word not in ignored
-    ]
-
-    return " ".join(words).strip()
-
-
-def search_items(query, items):
-
-    query = clean_query(query)
-
-    if not query:
-        return []
-
-    words = query.split()
-
-    results = []
-
-    for item in items:
-
-        searchable = " ".join([
-            str(item.get("name", "")),
-            str(item.get("category", "")),
-            str(item.get("group", "")),
-            str(item.get("aliases", "")),
-            str(item.get("_file", ""))
-        ]).lower()
-
-        if all(word in searchable for word in words):
-
-            results.append(item)
-
-    return results
-
-
-# ==========================================
-# CATEGORY SYSTEM
-# ==========================================
-
-CATEGORY_ALIASES = {
-
-    "rr": ["rare", "rr"],
-    "rare": ["rare", "rr"],
-
-    "armor": ["armor", "armour"],
-    "armour": ["armor", "armour"],
-
-    "mvp": ["mvp"],
-
-    "sword": ["sword"],
-    "swords": ["sword"],
-
-    "title": ["title"],
-    "titles": ["title"],
-
-    "event": ["event"],
+logger = logging.getLogger("ElyxTrading")
+
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+GITHUB_USER = "chakiosman89-blip"
+GITHUB_REPO = "elyx-bot"
+GITHUB_BRANCH = "main"
+DATA_DIR = Path("data")
+
+CATEGORY_CONFIG = {
+    "MVP": {"color": 0xFF0055, "badge": "👑"},
+    "Rare": {"color": 0xFF7700, "badge": "💎"},
+    "MVP SW": {"color": 0xFFDD00, "badge": "⚔️"},
+    "Rare SW": {"color": 0x00E676, "badge": "🗡️"},
+    "MVP Armor": {"color": 0x00B0FF, "badge": "🛡️"},
+    "Rare Armor": {"color": 0x651FFF, "badge": "🔰"},
+    "MVP Titles": {"color": 0xD500F9, "badge": "🏷️"},
+    "Rare Titles": {"color": 0xFF4081, "badge": "✨"},
 }
 
-
-def get_category(item):
-
-    category = str(
-        item.get("category", item.get("_file", "Other"))
-    )
-
-    return category
-
-
-def category_search(category, items):
-
-    category = category.lower().strip()
-
-    terms = CATEGORY_ALIASES.get(
-        category,
-        [category]
-    )
-
-    results = []
-
-    for item in items:
-
-        item_category = get_category(item).lower()
-
-        item_group = str(
-            item.get("group", "")
-        ).lower()
-
-        if any(
-            term in item_category or term in item_group
-            for term in terms
-        ):
-
-            results.append(item)
-
-    return results
-
-
-# ==========================================
-# RESULT EMBED SYSTEM
-# ==========================================
-
-async def send_results(message, title, results):
-
-    if not results:
-
-        embed = create_embed(
-            "🔎 ELYX SEARCH",
-            "❌ Koi matching item nahi mila."
-        )
-
-        await message.reply(
-            embed=embed,
-            mention_author=False
-        )
-
-        return
-
-    lines = []
-
-    for item in results:
-
-        name = item.get("name", "Unknown")
-
-        category = get_category(item)
-
-        value = item.get(
-            "value",
-            "Not verified"
-        )
-
-        demand = item.get(
-            "demand",
-            "Unknown"
-        )
-
-        line = (
-            f"🔹 **{name}** "
-            f"[{category}] — "
-            f"**{value}** ({demand})"
-        )
-
-        lines.append(line)
-
-    # Discord embed character limit protection
-
-    chunks = []
-
-    current = ""
-
-    for line in lines:
-
-        if len(current) + len(line) > 3800:
-
-            chunks.append(current)
-
-            current = line
-
-        else:
-
-            current += (
-                "\n" if current else ""
-            ) + line
-
-    if current:
-        chunks.append(current)
-
-    for number, chunk in enumerate(chunks, 1):
-
-        embed = create_embed(
-            f"🌈 {title}",
-            chunk
-        )
-
-        embed.add_field(
-            name="📊 Total Items",
-            value=str(len(results)),
-            inline=True
-        )
-
-        embed.add_field(
-            name="📁 Results Page",
-            value=f"{number}/{len(chunks)}",
-            inline=True
-        )
-
-        await message.reply(
-            embed=embed,
-            mention_author=False
-        )
-
-# ==========================================
-# 🌈 GITHUB AUTOMATIC DATABASE SYNC
-# ==========================================
-
-def github_headers():
-
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "Elyx-Trading-Bot"
-    }
-
-    if GITHUB_TOKEN:
-        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
-
-    return headers
-
-
-def sync_github_data():
-
-    DATA_FOLDER.mkdir(exist_ok=True)
-
-    response = requests.get(
-        GITHUB_API,
-        headers=github_headers(),
-        timeout=25
-    )
-
-    response.raise_for_status()
-
-    files = response.json()
-
-    if not isinstance(files, list):
-        raise ValueError("Invalid GitHub folder response.")
-
-    downloaded = {}
-
-    for file_info in files:
-
-        if file_info.get("type") != "file":
-            continue
-
-        filename = file_info.get("name", "")
-
-        if not filename.lower().endswith(".json"):
-            continue
-
-        download_url = file_info.get("download_url")
-
-        if not download_url:
-            continue
-
-        file_response = requests.get(
-            download_url,
-            headers=github_headers(),
-            timeout=25
-        )
-
-        file_response.raise_for_status()
-
-        content = file_response.text
-
-        # Validate JSON before saving
-        json.loads(content)
-
-        downloaded[filename] = content
-
-    if not downloaded:
-        raise ValueError("GitHub data folder has no JSON files.")
-
-    # Save only after all files pass validation
-    for filename, content in downloaded.items():
-
-        temporary = DATA_FOLDER / f".{filename}.tmp"
-
-        temporary.write_text(
-            content,
-            encoding="utf-8"
-        )
-
-        temporary.replace(
-            DATA_FOLDER / filename
-        )
-
-    return len(downloaded)
-
-
-async def perform_sync():
-
-    async with sync_lock:
-
-        return await asyncio.to_thread(
-            sync_github_data
-        )
-
-
-# ==========================================
-# AUTOMATIC 5 MINUTE SYNC
-# ==========================================
-
-@tasks.loop(minutes=SYNC_INTERVAL)
-async def automatic_sync():
-
-    try:
-
-        total = await perform_sync()
-
-        logger.info(
-            f"GitHub Sync Successful: {total} JSON files"
-        )
-
-    except Exception as error:
-
-        logger.error(
-            f"GitHub Sync Failed: {error}"
-        )
-
-        logger.info(
-            "Using local JSON backup."
-        )
-
-
-@automatic_sync.before_loop
-async def before_sync():
-
-    await bot.wait_until_ready()
-
-
-# ==========================================
-# BOT STARTUP
-# ==========================================
-
-@bot.event
-async def on_ready():
-
-    logger.info(
-        f"ELYX TRADING ONLINE: {bot.user}"
-    )
-
-    if not automatic_sync.is_running():
-
-        automatic_sync.start()
-
-    try:
-
-        total = await perform_sync()
-
-        logger.info(
-            f"Initial Sync: {total} files"
-        )
-
-    except Exception as error:
-
-        logger.warning(
-            f"Initial Sync Failed: {error}"
-        )
-
-        logger.warning(
-            "Local database will be used."
-        )
-
-
-# ==========================================
-# HELP MENU
-# ==========================================
-
-async def show_help(message):
-
-    embed = create_embed(
-        "🌈 ELYX TRADING",
-        "**BLOCKMAN GO • SKYBLOCK MARKET**\n\n"
-
-        "🔎 **ITEM SEARCH**\n"
-        "`@Elyx Trading hades`\n"
-        "`@Elyx Trading valk`\n"
-        "`@Elyx Trading thor`\n\n"
-
-        "📚 **CATEGORY LIST**\n"
-        "`@Elyx Trading list mvp`\n"
-        "`@Elyx Trading list rr`\n"
-        "`@Elyx Trading list armor`\n"
-        "`@Elyx Trading list swords`\n"
-        "`@Elyx Trading list titles`\n"
-        "`@Elyx Trading list event`\n\n"
-
-        "🔄 **DATABASE**\n"
-        "`@Elyx Trading sync`\n\n"
-
-        "ℹ️ **HELP**\n"
-        "`@Elyx Trading help`"
-    )
-
-    await message.reply(
-        embed=embed,
-        mention_author=False
-    )
-
-
-# ==========================================
-# CATEGORY COMMAND HANDLER
-# ==========================================
-
-async def handle_category(message, category):
-
-    items = load_all_items()
-
-    results = category_search(
-        category,
-        items
-    )
-
-    await send_results(
-        message,
-        f"📚 {category.upper()} ITEMS",
-        results
-    )
-
-
-# ==========================================
-# MAIN MENTION SYSTEM
-# ==========================================
-
-@bot.event
-async def on_message(message):
-
-    if message.author.bot:
-        return
-
-    if bot.user is None:
-        return
-
-    # Ignore messages without bot mention
-    if bot.user not in message.mentions:
-        return
-
-    content = message.content
-
-    content = re.sub(
-        rf"<@!?{bot.user.id}>",
-        "",
-        content
-    ).strip()
-
-    if not content:
-
-        await show_help(message)
-
-        return
-
-    parts = content.split(maxsplit=1)
-
-    command = parts[0].lower()
-
-    argument = (
-        parts[1].strip()
-        if len(parts) > 1
-        else ""
-    )
-
-    # HELP
-    if command in ["help", "commands"]:
-
-        await show_help(message)
-
-        return
-
-    # MANUAL SYNC
-    if command == "sync":
+RAINBOW_BAR = "🟥🟧🟨🟩🟦🟪"
+
+
+class MarketDatabase:
+    def __init__(self):
+        self.items: list[dict] = []
+        self.last_sync: str = "Local Cache"
+        self.sync_status: str = "🟡 Local Mode"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _validate_and_clean(self, raw_items: list) -> list[dict]:
+        cleaned = []
+        seen_names = set()
+
+        for entry in raw_items:
+            if not isinstance(entry, dict):
+                continue
+
+            name = str(entry.get("name", "")).strip()
+            category = str(entry.get("category", "")).strip()
+            value = str(entry.get("value", "Unverified")).strip()
+            demand = str(entry.get("demand", "Unverified")).strip()
+            trend = str(entry.get("trend", "")).strip().lower()
+
+            if not name or category not in CATEGORY_CONFIG:
+                continue
+
+            name_key = f"{name.lower()}_{category.lower()}"
+            if name_key in seen_names:
+                continue
+            seen_names.add(name_key)
+
+            if demand.lower() in ["low", "medium", "high"]:
+                demand = demand.capitalize()
+            else:
+                demand = "Unverified"
+
+            if not value:
+                value = "Unverified"
+
+            cleaned.append({
+                "name": name,
+                "category": category,
+                "value": value,
+                "demand": demand,
+                "trend": trend
+            })
+
+        return cleaned
+
+    def load_local_files(self):
+        all_raw = []
+        for file_path in DATA_DIR.glob("*.json"):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and isinstance(data.get("items"), list):
+                    all_raw.extend(data["items"])
+            except Exception as e:
+                logger.error(f"Error reading {file_path.name}: {e}")
+
+        self.items = self._validate_and_clean(all_raw)
+        logger.info(f"Loaded {len(self.items)} verified items from local storage.")
+
+    async def sync_from_github(self):
+        api_url = f"https://github.com{GITHUB_USER}/{GITHUB_REPO}/contents/data?ref={GITHUB_BRANCH}"
+        headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "Elyx-Trading-Bot"}
 
         try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(api_url, timeout=15) as resp:
+                    if resp.status != 200:
+                        raise RuntimeError(f"GitHub API status {resp.status}")
+                    files_meta = await resp.json()
 
-            total = await perform_sync()
+                json_files = [
+                    f for f in files_meta
+                    if isinstance(f, dict) and f.get("name", "").endswith(".json") and f.get("download_url")
+                ]
 
-            embed = create_embed(
-                "✅ DATABASE UPDATED",
-                f"GitHub se **{total} JSON files** sync hui.\n\n"
-                "🌈 Elyx Trading database updated."
+                if not json_files:
+                    raise RuntimeError("No JSON files in GitHub data folder.")
+
+                fetched_raw = []
+                for file_info in json_files:
+                    fname = file_info["name"]
+                    raw_url = file_info["download_url"]
+                    async with session.get(raw_url, timeout=15) as file_resp:
+                        if file_resp.status == 200:
+                            text_data = await file_resp.text()
+                            try:
+                                parsed = json.loads(text_data)
+                                if isinstance(parsed, dict) and isinstance(parsed.get("items"), list):
+                                    fetched_raw.extend(parsed["items"])
+                                    with open(DATA_DIR / fname, "w", encoding="utf-8") as lf:
+                                        json.dump(parsed, lf, indent=2, ensure_ascii=False)
+                            except json.JSONDecodeError:
+                                logger.error(f"Invalid JSON in {fname}")
+
+                if fetched_raw:
+                    self.items = self._validate_and_clean(fetched_raw)
+                    self.last_sync = datetime.now(timezone.utc).strftime("%H:%M UTC")
+                    self.sync_status = f"🟢 Live Synced ({self.last_sync})"
+                    logger.info(f"GitHub sync complete: {len(self.items)} items.")
+
+        except Exception as e:
+            self.sync_status = "🟠 Offline Fallback (Local DB)"
+            logger.warning(f"GitHub sync failed ({e}). Using local DB.")
+            if not self.items:
+                self.load_local_files()
+
+class ElyxTradingBot(discord.Client):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(intents=intents)
+        self.db = MarketDatabase()
+
+    async def setup_hook(self):
+        self.db.load_local_files()
+        self.auto_sync_task.start()
+
+    async def on_ready(self):
+        await self.change_presence(
+            activity=discord.Activity(
+                type=discord.ActivityType.watching,
+                name="Elyx Trading | @mention me"
             )
-
-        except Exception as error:
-
-            embed = create_embed(
-                "⚠️ SYNC FAILED",
-                "Local JSON backup use ho raha hai.\n"
-                f"`{str(error)[:500]}`"
-            )
-
-        await message.reply(
-            embed=embed,
-            mention_author=False
         )
+        logger.info(f"Logged in as {self.user} - Elyx Trading Ready!")
 
-        return
+    @tasks.loop(minutes=5)
+    async def auto_sync_task(self):
+        await self.db.sync_from_github()
 
-    # CATEGORY SEARCH
-    if command == "list":
+    @auto_sync_task.before_loop
+    async def before_auto_sync(self):
+        await self.wait_until_ready()
 
-        if not argument:
+    def _format_demand(self, demand: str) -> str:
+        mapping = {
+            "High": "🔥 High",
+            "Medium": "⚡ Medium",
+            "Low": "❄️ Low",
+            "Unverified": "❔ Unverified"
+        }
+        return mapping.get(demand, "❔ Unverified")
 
-            await message.reply(
-                embed=create_embed(
-                    "📚 CATEGORY LIST",
-                    "Category likho:\n"
-                    "`mvp`, `rr`, `armor`, `swords`, `titles`, `event`"
-                ),
-                mention_author=False
+    def _format_value(self, item: dict) -> str:
+        value = item.get("value", "Unverified")
+        trend = item.get("trend", "")
+        if value.lower() == "unverified":
+            return "`Unverified`"
+        arrow = " 📈" if trend == "up" else (" 📉" if trend == "down" else "")
+        return f"💰 **`{value}`**{arrow}"
+
+    def build_category_embeds(self, items: list[dict], title_prefix: str = "MARKET INDEX") -> list[discord.Embed]:
+        grouped: dict[str, list[dict]] = {cat: [] for cat in CATEGORY_CONFIG}
+        for item in items:
+            grouped[item["category"]].append(item)
+
+        embeds = []
+        for category, cat_items in grouped.items():
+            if not cat_items:
+                continue
+
+            cfg = CATEGORY_CONFIG[category]
+            lines = []
+            for idx, it in enumerate(cat_items, start=1):
+                val_str = self._format_value(it)
+                dem_str = self._format_demand(it["demand"])
+                lines.append(f"**{idx}. {it['name']}**  •  {val_str}  •  {dem_str}")
+
+            description_text = "\n".join(lines)
+            if len(description_text) > 3900:
+                description_text = description_text[:3900] + "\n*...search exact item name for more*"
+
+            embed = discord.Embed(
+                title=f"{cfg['badge']} ELYX TRADING • {category.upper()} ({title_prefix})",
+                description=f"{RAINBOW_BAR}\n\n{description_text}\n\n{RAINBOW_BAR}",
+                color=cfg["color"],
+                timestamp=datetime.now(timezone.utc)
             )
+            embed.set_footer(text=f"Elyx Trading Market Terminal • {self.db.sync_status}")
+            embeds.append(embed)
 
+        return embeds
+
+    def build_help_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="🌈 ELYX TRADING • LIVE MARKET TERMINAL",
+            description=(
+                f"{RAINBOW_BAR}\n"
+                "Blockman GO Skyblock Gcube items & demand tracker.\n\n"
+                "**🔍 Item Search:**\n"
+                f"> {self.user.mention} `Fenrir`\n"
+                f"> {self.user.mention} `Harem`\n\n"
+                "**📂 Category Filter:**\n"
+                f"> {self.user.mention} `MVP SW` • `Rare SW` • `MVP Armor` • `Rare Armor`\n"
+                f"> {self.user.mention} `MVP` • `Rare` • `MVP Titles` • `Rare Titles`\n\n"
+                "**📊 Full Market List:**\n"
+                f"> {self.user.mention} `all`\n"
+                f"{RAINBOW_BAR}"
+            ),
+            color=0x00F5D4
+        )
+        embed.add_field(name="📦 Indexed Items", value=f"`{len(self.db.items)} Items`", inline=True)
+        embed.add_field(name="🔄 Database Status", value=f"`{self.db.sync_status}`", inline=True)
+        embed.set_footer(text="Elyx Trading • Values in M / B • Community Verified")
+        return embed
+
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or self.user not in message.mentions:
             return
 
-        await handle_category(
-            message,
-            argument
+        clean_query = message.content
+        for mention_str in [f"<@{self.user.id}>", f"<@!{self.user.id}>"]:
+            clean_query = clean_query.replace(mention_str, "")
+        clean_query = clean_query.strip()
+
+        if not clean_query or clean_query.lower() in ["help", "menu", "commands"]:
+            await message.reply(embed=self.build_help_embed(), mention_author=False)
+            return
+
+        if clean_query.lower() in ["all", "list", "market", "values"]:
+            embeds = self.build_category_embeds(self.db.items, title_prefix="ALL VALUES")
+            if not embeds:
+                await message.reply("⚠️ Database mein abhi koi item load nahi hai.", mention_author=False)
+                return
+            for i in range(0, len(embeds), 10):
+                await message.reply(embeds=embeds[i:i + 10], mention_author=False)
+            return
+
+        matched_category = next(
+            (cat for cat in CATEGORY_CONFIG if clean_query.lower() == cat.lower()),
+            None
         )
 
-        return
+        if matched_category:
+            cat_items = [it for it in self.db.items if it["category"] == matched_category]
+            embeds = self.build_category_embeds(cat_items, title_prefix="CATEGORY")
+            if not embeds:
+                await message.reply(f"⚠️ **{matched_category}** category abhi khaali hai.", mention_author=False)
+                return
+            await message.reply(embeds=embeds, mention_author=False)
+            return
 
-    # SMART ITEM SEARCH
-    items = load_all_items()
+        query_lower = clean_query.lower()
+        results = [it for it in self.db.items if query_lower in it["name"].lower()]
 
-    results = search_items(
-        content,
-        items
-    )
+        if not results:
+            no_res = discord.Embed(
+                title="❌ ELYX TRADING • NO ITEM FOUND",
+                description=(
+                    f"{RAINBOW_BAR}\n"
+                    f"**`{clean_query}`** naam ka koi item database mein nahi mila.\n"
+                    f"Spelling check karein ya {self.user.mention} `all` likhein.\n"
+                    f"{RAINBOW_BAR}"
+                ),
+                color=0xFF1744
+            )
+            no_res.set_footer(text=f"Elyx Trading • {self.db.sync_status}")
+            await message.reply(embed=no_res, mention_author=False)
+            return
 
-    await send_results(
-        message,
-        f"SEARCH: {content}",
-        results
-    )
+        embeds = self.build_category_embeds(results, title_prefix="SEARCH RESULT")
+        for i in range(0, len(embeds), 10):
+            await message.reply(embeds=embeds[i:i + 10], mention_author=False)
 
-
-# ==========================================
-# ERROR HANDLING
-# ==========================================
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-
-    logger.exception(
-        f"Discord event error: {event}"
-    )
-
-
-# ==========================================
-# START ELYX TRADING
-# ==========================================
 
 if __name__ == "__main__":
-
-    if not BOT_TOKEN:
-
-        raise RuntimeError(
-            "DISCORD_TOKEN missing! Add it to hosting environment variables."
-        )
-
-    bot.run(BOT_TOKEN)
+    if not DISCORD_TOKEN:
+        raise RuntimeError("DISCORD_TOKEN environment variable missing!")
+    bot = ElyxTradingBot()
+    bot.run(DISCORD_TOKEN)
+        

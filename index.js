@@ -502,58 +502,30 @@ client.on('interactionCreate', async interaction => {
             return interaction.showModal(modal);
     }
 
-            if (interaction.isModalSubmit() && interaction.customId.startsWith('exec_')) {
-            if (!activeMarketSession || !activeMarketSession.isLive) return;
 
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('exec_')) {
+            if (!activeMarketSession || !activeMarketSession.isLive) return;
             const [, side, sym] = interaction.customId.split('_');
             const qty = parseInt(interaction.fields.getTextInputValue('qty_input'), 10);
             const asset = activeMarketSession.market.assets[sym];
             const trader = activeMarketSession.traders[interaction.user.id];
-
             if (!trader) return;
 
-            if (isNaN(qty) || qty <= 0) {
-                return interaction.reply({
-                    content: '❌ Enter a valid positive number.',
-                    ephemeral: true
-                });
-            }
+            if (isNaN(qty) || qty <= 0) return interaction.reply({ content: '❌ Enter a valid positive number.', ephemeral: true });
 
             if (side === 'buy') {
                 const cost = qty * asset.price;
-
-                if (cost > trader.cash) {
-                    return interaction.reply({
-                        content: `❌ Insufficient cash! Needed: \`₹${cost.toLocaleString()}\`.`,
-                        ephemeral: true
-                    });
-                }
-
+                if (cost > trader.cash) return interaction.reply({ content: `❌ Insufficient cash! Needed: \`₹${cost.toLocaleString()}\`.`, ephemeral: true });
                 trader.cash -= cost;
                 trader.holdings[sym] = (trader.holdings[sym] || 0) + qty;
-
-                return interaction.reply({
-                    content: `🟢 **BOUGHT:** \`${qty}x ${asset.name}\` @ \`₹${asset.price.toLocaleString()}\` (Total: \`₹${cost.toLocaleString()}\`).`,
-                    ephemeral: true
-                });
+                return interaction.reply({ content: `🟢 **BOUGHT:** \`${qty}x ${asset.name}\` @ \`₹${asset.price.toLocaleString()}\` (Total: \`₹${cost.toLocaleString()}\`).`, ephemeral: true });
             } else {
                 const held = trader.holdings[sym] || 0;
-
-                if (qty > held) {
-                    return interaction.reply({
-                        content: `❌ You only hold \`${held} units\` of ${sym}.`,
-                        ephemeral: true
-                    });
-                }
-
+                if (qty > held) return interaction.reply({ content: `❌ You only hold \`${held} units\` of ${sym}.`, ephemeral: true });
                 const proceeds = qty * asset.price;
                 trader.holdings[sym] -= qty;
                 trader.cash += proceeds;
-
-                return interaction.reply({
-                    content: `🔴 **SOLD:** \`${qty}x ${asset.name}\` @ \`₹${asset.price.toLocaleString()}\` (Received: \`₹${proceeds.toLocaleString()}\`).`,
-                    ephemeral: true
-                });
+                return interaction.reply({ content: `🔴 **SOLD:** \`${qty}x ${asset.name}\` @ \`₹${asset.price.toLocaleString()}\` (Received: \`₹${proceeds.toLocaleString()}\`).`, ephemeral: true });
             }
         }
     } catch (err) {
@@ -562,13 +534,8 @@ client.on('interactionCreate', async interaction => {
 });
 
 async function openPrivateTicket(guild, p1, p2) {
-    const fmRole = guild.roles.cache.find(r =>
-        r.name.includes(CONFIG.FUND_MANAGER_ROLE_NAME)
-    );
-
-    const plansChannel = await guild.channels.fetch(
-        CONFIG.INVESTMENT_PLANS_CHANNEL_ID
-    ).catch(() => null);
+    const fmRole = guild.roles.cache.find(r => r.name.includes(CONFIG.FUND_MANAGER_ROLE_NAME));
+    const plansChannel = await guild.channels.fetch(CONFIG.INVESTMENT_PLANS_CHANNEL_ID).catch(() => null);
 
     const perms = [
         {
@@ -576,17 +543,28 @@ async function openPrivateTicket(guild, p1, p2) {
             deny: [PermissionsBitField.Flags.ViewChannel]
         },
         {
+            id: client.user.id,
+            allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory,
+                PermissionsBitField.Flags.EmbedLinks
+            ]
+        },
+        {
             id: p1.id,
             allow: [
                 PermissionsBitField.Flags.ViewChannel,
-                PermissionsBitField.Flags.SendMessages
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory
             ]
         },
         {
             id: p2.id,
             allow: [
                 PermissionsBitField.Flags.ViewChannel,
-                PermissionsBitField.Flags.SendMessages
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory
             ]
         }
     ];
@@ -596,7 +574,8 @@ async function openPrivateTicket(guild, p1, p2) {
             id: fmRole.id,
             allow: [
                 PermissionsBitField.Flags.ViewChannel,
-                PermissionsBitField.Flags.SendMessages
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory
             ]
         });
     }
@@ -622,7 +601,7 @@ async function openPrivateTicket(guild, p1, p2) {
         .setDescription(
             `**Initiator:** ${p1}\n` +
             `**Counterparty:** ${p2}\n\n` +
-            `${p2}, click **Accept** to proceed, or **Decline** (this room will automatically delete if declined).`
+            `${p2}, click **Accept** to proceed, or **Decline** to cancel.`
         )
         .setColor('#2563EB');
 
@@ -649,76 +628,29 @@ async function openPrivateTicket(guild, p1, p2) {
 
 function buildEscrowControls(ticket) {
     return new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('fm_verify_p1')
-            .setLabel(`Verify ${ticket.p1.username} (${ticket.tier})`)
-            .setEmoji(ticket.p1Verified ? '✅' : '⏳')
-            .setStyle(ticket.p1Verified ? ButtonStyle.Success : ButtonStyle.Secondary)
-            .setDisabled(ticket.p1Verified),
-
-        new ButtonBuilder()
-            .setCustomId('fm_verify_p2')
-            .setLabel(`Verify ${ticket.p2.username} (${ticket.tier})`)
-            .setEmoji(ticket.p2Verified ? '✅' : '⏳')
-            .setStyle(ticket.p2Verified ? ButtonStyle.Success : ButtonStyle.Secondary)
-            .setDisabled(ticket.p2Verified),
-
-        new ButtonBuilder()
-            .setCustomId('fm_start_market')
-            .setLabel('Start Market')
-            .setEmoji('🔔')
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(!(ticket.p1Verified && ticket.p2Verified))
+        new ButtonBuilder().setCustomId('fm_verify_p1').setLabel(`Verify ${ticket.p1.username} (${ticket.tier})`).setEmoji(ticket.p1Verified ? '✅' : '⏳').setStyle(ticket.p1Verified ? ButtonStyle.Success : ButtonStyle.Secondary).setDisabled(ticket.p1Verified),
+        new ButtonBuilder().setCustomId('fm_verify_p2').setLabel(`Verify ${ticket.p2.username} (${ticket.tier})`).setEmoji(ticket.p2Verified ? '✅' : '⏳').setStyle(ticket.p2Verified ? ButtonStyle.Success : ButtonStyle.Secondary).setDisabled(ticket.p2Verified),
+        new ButtonBuilder().setCustomId('fm_start_market').setLabel('Start Market').setEmoji('🔔').setStyle(ButtonStyle.Primary).setDisabled(!(ticket.p1Verified && ticket.p2Verified))
     );
 }
 
 async function launchLiveMarketChannel(guild, ticket) {
-    const marketChannel = await guild.channels.fetch(
-        CONFIG.LIVE_MARKET_CHANNEL_ID
-    ).catch(() => null);
-
-    if (!marketChannel) {
-        return console.log('⚠️ LIVE_MARKET_CHANNEL_ID not found.');
-    }
+    const marketChannel = await guild.channels.fetch(CONFIG.LIVE_MARKET_CHANNEL_ID).catch(() => null);
+    if (!marketChannel) return console.log('⚠️ LIVE_MARKET_CHANNEL_ID not found.');
 
     activeMarketSession = {
-        p1: ticket.p1,
-        p2: ticket.p2,
-        tier: ticket.tier,
-        payout: ticket.payout,
-        isLive: true,
-        endTime: Date.now() + CONFIG.SESSION_DURATION_MS,
-        market: createMarketState(),
+        p1: ticket.p1, p2: ticket.p2, tier: ticket.tier, payout: ticket.payout,
+        isLive: true, endTime: Date.now() + CONFIG.SESSION_DURATION_MS, market: createMarketState(),
         traders: {
-            [ticket.p1.id]: {
-                cash: CONFIG.STARTING_CASH,
-                holdings: {}
-            },
-            [ticket.p2.id]: {
-                cash: CONFIG.STARTING_CASH,
-                holdings: {}
-            }
+            [ticket.p1.id]: { cash: CONFIG.STARTING_CASH, holdings: {} },
+            [ticket.p2.id]: { cash: CONFIG.STARTING_CASH, holdings: {} }
         }
     };
 
     const controls = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('mkt_buy')
-            .setLabel('Buy Share / Fund')
-            .setEmoji('🟢')
-            .setStyle(ButtonStyle.Success),
-
-        new ButtonBuilder()
-            .setCustomId('mkt_sell')
-            .setLabel('Sell / Redeem')
-            .setEmoji('🔴')
-            .setStyle(ButtonStyle.Danger),
-
-        new ButtonBuilder()
-            .setCustomId('mkt_portfolio')
-            .setLabel('My Portfolio')
-            .setEmoji('💼')
-            .setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('mkt_buy').setLabel('Buy Share / Fund').setEmoji('🟢').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('mkt_sell').setLabel('Sell / Redeem').setEmoji('🔴').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('mkt_portfolio').setLabel('My Portfolio').setEmoji('💼').setStyle(ButtonStyle.Secondary)
     );
 
     const boardMsg = await marketChannel.send({
@@ -728,28 +660,14 @@ async function launchLiveMarketChannel(guild, ticket) {
     });
 
     const interval = setInterval(async () => {
-        if (!activeMarketSession) {
-            return clearInterval(interval);
-        }
-
+        if (!activeMarketSession) return clearInterval(interval);
         if (Date.now() >= activeMarketSession.endTime) {
             clearInterval(interval);
             activeMarketSession.isLive = false;
-
-            return finishSessionAndAnnounce(
-                guild,
-                marketChannel,
-                boardMsg,
-                activeMarketSession
-            );
+            return finishSessionAndAnnounce(guild, marketChannel, boardMsg, activeMarketSession);
         }
-
         tickMarketPrices(activeMarketSession.market);
-
-        await boardMsg.edit({
-            embeds: [buildMarketEmbed(activeMarketSession)]
-        }).catch(() => {});
-
+        await boardMsg.edit({ embeds: [buildMarketEmbed(activeMarketSession)] }).catch(() => {});
     }, CONFIG.PRICE_TICK_MS);
 }
 
@@ -760,25 +678,16 @@ function buildMarketEmbed(session) {
     const remMins = mins % 60;
 
     let table = 'SYMBOL | INSTRUMENT          | PRICE    | CHANGE\n------------------------------------------------\n';
-
     for (const [sym, data] of Object.entries(session.market.assets)) {
         const diff = data.price - data.prevPrice;
         const pct = ((diff / data.prevPrice) * 100).toFixed(2);
         const arrow = diff >= 0 ? '▲' : '▼';
         const sign = diff >= 0 ? '+' : '';
-
         table += `${sym.padEnd(6)} | ${data.name.padEnd(19)} | ₹${String(data.price).padEnd(7)} | ${arrow} ${sign}${pct}%\n`;
     }
 
-    const p1Net = calculateNetWorth(
-        session.traders[session.p1.id],
-        session.market
-    );
-
-    const p2Net = calculateNetWorth(
-        session.traders[session.p2.id],
-        session.market
-    );
+    const p1Net = calculateNetWorth(session.traders[session.p1.id], session.market);
+    const p2Net = calculateNetWorth(session.traders[session.p2.id], session.market);
 
     return new EmbedBuilder()
         .setTitle(`📊 ELYX LIVE MARKET | RETURN: ${session.payout} BMGO`)
@@ -792,41 +701,23 @@ function buildMarketEmbed(session) {
         )
         .setThumbnail(CONFIG.GIFS.LIVE_MARKET)
         .setColor('#10B981')
-        .setFooter({
-            text: 'Rates fluctuate randomly every 30s • Only active investors may execute orders'
-        });
+        .setFooter({ text: 'Rates fluctuate randomly every 30s • Only active investors may execute orders' });
 }
 
 function calculateNetWorth(trader, market) {
     let val = 0;
-
-    for (const [sym, qty] of Object.entries(trader.holdings)) {
-        val += qty * market.assets[sym].price;
-    }
-
+    for (const [sym, qty] of Object.entries(trader.holdings)) val += qty * market.assets[sym].price;
     return trader.cash + val;
 }
 
 async function finishSessionAndAnnounce(guild, marketChannel, boardMsg, session) {
-    const p1Final = calculateNetWorth(
-        session.traders[session.p1.id],
-        session.market
-    );
-
-    const p2Final = calculateNetWorth(
-        session.traders[session.p2.id],
-        session.market
-    );
+    const p1Final = calculateNetWorth(session.traders[session.p1.id], session.market);
+    const p2Final = calculateNetWorth(session.traders[session.p2.id], session.market);
 
     let result = '';
-
-    if (p1Final > p2Final) {
-        result = `🏆 **${session.p1}** wins the session and claims **${session.payout} BMGO Skyblock Coins**!`;
-    } else if (p2Final > p1Final) {
-        result = `🏆 **${session.p2}** wins the session and claims **${session.payout} BMGO Skyblock Coins**!`;
-    } else {
-        result = `🤝 **Exact Tie!** Both investors finished with identical Net Worth. Fund Manager may refund deposits.`;
-    }
+    if (p1Final > p2Final) result = `🏆 **${session.p1}** wins the session and claims **${session.payout} BMGO Skyblock Coins**!`;
+    else if (p2Final > p1Final) result = `🏆 **${session.p2}** wins the session and claims **${session.payout} BMGO Skyblock Coins**!`;
+    else result = `🤝 **Exact Tie!** Both investors finished with identical Net Worth. Fund Manager may refund deposits.`;
 
     const winEmbed = new EmbedBuilder()
         .setTitle('🔔 CLOSING BELL | OFFICIAL WINNER ANNOUNCEMENT')
@@ -841,22 +732,10 @@ async function finishSessionAndAnnounce(guild, marketChannel, boardMsg, session)
         .setColor('#FFD700');
 
     await boardMsg.edit({ components: [] }).catch(() => {});
+    await marketChannel.send({ content: `${session.p1} ${session.p2}`, embeds: [winEmbed] });
 
-    await marketChannel.send({
-        content: `${session.p1} ${session.p2}`,
-        embeds: [winEmbed]
-    });
-
-    const plansChannel = await guild.channels.fetch(
-        CONFIG.INVESTMENT_PLANS_CHANNEL_ID
-    ).catch(() => null);
-
-    if (plansChannel) {
-        await plansChannel.send({
-            content: `${session.p1} ${session.p2}`,
-            embeds: [winEmbed]
-        });
-    }
+    const plansChannel = await guild.channels.fetch(CONFIG.INVESTMENT_PLANS_CHANNEL_ID).catch(() => null);
+    if (plansChannel) await plansChannel.send({ content: `${session.p1} ${session.p2}`, embeds: [winEmbed] });
 
     activeMarketSession = null;
 }

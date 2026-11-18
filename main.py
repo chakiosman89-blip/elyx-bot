@@ -185,6 +185,7 @@ def create_embed(title, description, colour=discord.Colour.blurple()):
 def get_user_memories(user_id):
 
     try:
+
         memories = recall(
             str(user_id),
             limit=5,
@@ -205,6 +206,7 @@ def get_user_memories(user_id):
 def get_project_memories():
 
     try:
+
         memories = recall_project(limit=10)
 
         if not memories:
@@ -239,6 +241,7 @@ async def handle_normal_ai_message(message):
     messages = list(history)
 
     if memory_context:
+
         messages.append({
             "role": "user",
             "content": (
@@ -259,6 +262,7 @@ async def handle_normal_ai_message(message):
             reply = await generate_reply(messages)
 
         if not isinstance(reply, str) or not reply.strip():
+
             reply = "Mujhe response generate karne mein problem hui."
 
         history.append({
@@ -353,50 +357,121 @@ def looks_like_coding_request(prompt):
 
 
 # ==========================================
-# PROJECT SNAPSHOT
+# PROJECT SNAPSHOT - FIXED
 # ==========================================
 
-def build_project_snapshot():
+async def build_project_snapshot():
+
+    builder = GitHubBuilder()
 
     snapshot = []
     total_size = 0
 
+    per_file_limit = max(
+        500,
+        MAX_PROJECT_SNAPSHOT // len(PROJECT_FILES),
+    )
+
+    available_files = []
+
     for filename in PROJECT_FILES:
 
+        content = ""
+        source = ""
+
+        # First: try local project file.
         try:
 
             content = read_project_file(filename)
 
-            remaining = MAX_PROJECT_SNAPSHOT - total_size
+            source = "LOCAL"
 
-            if remaining <= 0:
-                break
+        except Exception as local_error:
 
-            content = content[:remaining]
-
-            section = (
-                f"\n\n===== FILE: {filename} =====\n"
-                f"{content}\n"
+            logger.info(
+                "Local read unavailable for %s: %s",
+                filename,
+                local_error,
             )
 
-            snapshot.append(section)
+            # Second: try GitHub.
+            try:
 
-            total_size += len(section)
+                result = await builder.get_file(filename)
 
-        except FileNotFoundError:
+                if result.get("success"):
+
+                    content = result.get("content", "")
+
+                    source = "GITHUB"
+
+            except Exception:
+
+                logger.exception(
+                    "GitHub read failed for %s",
+                    filename,
+                )
+
+        if not content:
+
+            logger.warning(
+                "Project file unavailable: %s",
+                filename,
+            )
 
             continue
 
-        except Exception as error:
+        available_files.append(filename)
 
-            logger.warning(
-                "Could not read %s: %s",
-                filename,
-                error,
+        remaining = MAX_PROJECT_SNAPSHOT - total_size
+
+        if remaining <= 0:
+            break
+
+        file_limit = min(
+            per_file_limit,
+            remaining,
+        )
+
+        original_length = len(content)
+
+        if len(content) > file_limit:
+
+            content = (
+                content[:file_limit]
+                + "\n[FILE CONTENT TRUNCATED]"
             )
 
-    return "\n".join(snapshot)
+        section = (
+            f"\n\n===== FILE: {filename} =====\n"
+            f"SOURCE: {source}\n"
+            f"ORIGINAL CHARACTERS: {original_length}\n"
+            f"{content}\n"
+        )
 
+        section = section[:remaining]
+
+        snapshot.append(section)
+
+        total_size += len(section)
+
+    final_snapshot = "\n".join(snapshot)
+
+    logger.info(
+        "Project snapshot: %s characters | Files found: %s/%s",
+        len(final_snapshot),
+        len(available_files),
+        len(PROJECT_FILES),
+    )
+
+    if available_files:
+
+        logger.info(
+            "Project files read: %s",
+            ", ".join(available_files),
+        )
+
+    return final_snapshot
 
 # ==========================================
 # CODING AGENT INSTRUCTIONS
@@ -409,35 +484,40 @@ You are a general-purpose Python Discord bot coding agent.
 
 The user may speak Hindi, Hinglish or English.
 
-Your job:
-1. Understand the requested development task.
-2. Inspect the supplied project files.
-3. Identify the exact files that need changes.
-4. Produce complete replacement contents for changed files.
-5. Preserve existing working features.
-6. Do not invent functions that do not exist.
-7. Do not claim that code has been tested unless it was tested.
-8. Do not claim GitHub was updated unless the GitHub operation succeeded.
+IMPORTANT:
+You will receive actual project files in the message context.
+
+You MUST inspect the supplied file contents before answering.
+
+Never claim to have inspected a file unless its actual contents
+are present in the supplied project snapshot.
+
+Never invent project files, functions, commands, settings or APIs.
+
+If a file is missing from the snapshot, clearly say that
+its contents were unavailable.
+
+PROJECT RULES:
+
+1. Understand the developer's request.
+2. Inspect relevant supplied project files.
+3. Identify the exact files requiring changes.
+4. Preserve existing working features.
+5. Use the existing discord.py architecture.
+6. Do not unnecessarily modify supporting files.
+7. Existing files can be updated.
+8. New files cannot currently be created through GitHubBuilder.
 9. Never reveal tokens, API keys or secrets.
-10. Do not create fake success messages.
-
-IMPORTANT PROJECT RULES:
-
-- Only use filenames from the supplied project.
-- Existing files can be updated.
-- New files cannot currently be created through the configured GitHubBuilder.
-- Do not request changes to files unnecessarily.
-- Preserve the existing Python discord.py architecture.
-- Do not remove existing features unless explicitly requested.
-- Never bypass confirmation for important Discord actions.
-- Never bypass GitHub approval.
+10. Never claim code was tested unless actually tested.
+11. Never claim GitHub was updated unless the operation succeeded.
+12. Important changes require developer approval.
 
 OUTPUT FORMAT:
 
 Return ONLY valid JSON.
 
 {
-    "summary": "Short explanation of the changes",
+    "summary": "Short explanation of the analysis or changes",
     "changes": [
         {
             "file": "main.py",
@@ -450,9 +530,15 @@ Each changed file must contain its COMPLETE new content.
 
 Do not return partial snippets.
 
-If a requested task cannot be completed with the available project files,
-return an empty changes list and explain the limitation in summary.
+If the developer asks only for analysis or a plan,
+return an empty changes list.
+
+If necessary project files are unavailable,
+explain the limitation in summary.
+
+Never invent missing code.
 """
+
 
 # ==========================================
 # CODE VALIDATION
@@ -510,13 +596,6 @@ def validate_coding_result(data):
                 f"{filename} exceeds the 100 KB size limit."
             )
 
-        # Existing GitHub Builder cannot create new files.
-        if not path.exists():
-            raise ValueError(
-                f"{filename} does not exist locally. "
-                "New file creation is not supported by the current GitHubBuilder."
-            )
-
         review = review_code_change(
             filename,
             content,
@@ -562,7 +641,6 @@ def parse_coding_json(raw):
 
     text = raw.strip()
 
-    # Remove optional Markdown code fences.
     if text.startswith("```"):
 
         text = re.sub(
@@ -586,7 +664,6 @@ def parse_coding_json(raw):
 
     except json.JSONDecodeError:
 
-        # Try extracting a JSON object from surrounding text.
         start = text.find("{")
         end = text.rfind("}")
 
@@ -695,10 +772,12 @@ class CodingApprovalView(discord.ui.View):
     ):
 
         if self.finished:
+
             await interaction.response.send_message(
                 "This approval has expired.",
                 ephemeral=True,
             )
+
             return
 
         self.finished = True
@@ -731,28 +810,33 @@ class CodingApprovalView(discord.ui.View):
             lines = []
 
             for result in successful:
+
                 lines.append(
                     f"SUCCESS: {result['file']}"
                 )
 
             for result in failed:
+
                 lines.append(
                     f"FAILED: {result['file']} — "
                     f"{result.get('message', 'Unknown error')}"
                 )
 
             if failed:
+
                 lines.append(
                     "\nSome files could not be updated. "
                     "Check GitHub before retrying."
                 )
 
             elif successful:
+
                 lines.append(
                     "\nAll requested GitHub updates succeeded."
                 )
 
             else:
+
                 lines.append(
                     "No files were updated."
                 )
@@ -809,7 +893,6 @@ async def commit_coding_changes(
 
         filename = change["file"]
 
-        # Re-check the latest GitHub version before updating.
         current = await builder.get_file(filename)
 
         if not current.get("success"):
@@ -822,8 +905,6 @@ async def commit_coding_changes(
 
             continue
 
-        # Prevent overwriting a file changed by someone else
-        # after the approval preview was created.
         if current.get("sha") != change.get("old_sha"):
 
             results.append({
@@ -890,46 +971,58 @@ async def run_coding_agent(message, prompt):
 
     history = USER_HISTORY.setdefault(user_id, [])
 
-    project_snapshot = build_project_snapshot()
+    try:
 
-    project_memory = get_project_memories()
+        async with message.channel.typing():
 
-    coding_messages = [
-        {
-            "role": "user",
-            "content": CODING_AGENT_SYSTEM,
-        },
-        {
-            "role": "user",
-            "content": (
-                "CURRENT ELYX PROJECT FILES:\n\n"
-                + project_snapshot
-            ),
-        },
-    ]
+            # IMPORTANT: Snapshot is now asynchronous.
+            project_snapshot = await build_project_snapshot()
 
-    if project_memory:
+        if not project_snapshot.strip():
+
+            await message.channel.send(
+                "Project files read nahi ho paayi. "
+                "Local files aur GitHub connection check karo."
+            )
+
+            return
+
+        project_memory = get_project_memories()
+
+        coding_messages = [
+            {
+                "role": "user",
+                "content": CODING_AGENT_SYSTEM,
+            },
+            {
+                "role": "user",
+                "content": (
+                    "ACTUAL ELYX PROJECT FILES:\n\n"
+                    + project_snapshot
+                ),
+            },
+        ]
+
+        if project_memory:
+
+            coding_messages.append({
+                "role": "user",
+                "content": (
+                    "SAVED PROJECT DECISIONS:\n\n"
+                    + project_memory
+                ),
+            })
+
+        coding_messages.extend(history[-MAX_HISTORY:])
 
         coding_messages.append({
             "role": "user",
             "content": (
-                "SAVED PROJECT DECISIONS:\n\n"
-                + project_memory
+                "DEVELOPER REQUEST:\n"
+                + prompt
+                + "\n\nReturn the required JSON only."
             ),
         })
-
-    coding_messages.extend(history[-MAX_HISTORY:])
-
-    coding_messages.append({
-        "role": "user",
-        "content": (
-            "DEVELOPER REQUEST:\n"
-            + prompt
-            + "\n\nReturn the required JSON only."
-        ),
-    })
-
-    try:
 
         async with message.channel.typing():
 
@@ -959,7 +1052,6 @@ async def run_coding_agent(message, prompt):
 
             prepared = await prepare_github_changes(changes)
 
-        # Keep a history of the developer's request and response.
         history.append({
             "role": "user",
             "content": prompt,
@@ -1075,7 +1167,7 @@ async def handle_developer_request(message, prompt):
     await run_coding_agent(
         message,
         prompt,
-)
+    )
 
 # ==========================================
 # HARD ACTION PARSER
@@ -1085,13 +1177,7 @@ def parse_hard_action(prompt):
 
     text = prompt.strip()
 
-    # --------------------------------------
     # CREATE CATEGORY
-    # Example:
-    # Elyx Games naam ki category banao
-    # Create category Elyx Games
-    # --------------------------------------
-
     patterns = [
         r"^(?P<name>.+?)\s+naam\s+ki\s+category\s+banao$",
         r"^category\s+(?P<name>.+?)\s+banao$",
@@ -1114,13 +1200,7 @@ def parse_hard_action(prompt):
                 "name": match.group("name").strip(),
             }
 
-    # --------------------------------------
     # CREATE CHANNEL INSIDE CATEGORY
-    # Example:
-    # battle-room channel Elyx Games
-    # category mein banao
-    # --------------------------------------
-
     patterns = [
         (
             r"^(?P<channel>.+?)\s+channel\s+"
@@ -1148,10 +1228,7 @@ def parse_hard_action(prompt):
                 "category": match.group("category").strip(),
             }
 
-    # --------------------------------------
     # CREATE CHANNEL WITHOUT CATEGORY
-    # --------------------------------------
-
     patterns = [
         r"^channel\s+(?P<name>.+?)\s+banao$",
         r"^(?P<name>.+?)\s+channel\s+banao$",
@@ -1174,13 +1251,7 @@ def parse_hard_action(prompt):
                 "category": None,
             }
 
-    # --------------------------------------
     # CREATE ROLE
-    # Example:
-    # Battle Manager role banao
-    # Create role Battle Manager
-    # --------------------------------------
-
     patterns = [
         r"^(?P<name>.+?)\s+role\s+banao$",
         r"^role\s+(?P<name>.+?)\s+banao$",
@@ -1202,10 +1273,7 @@ def parse_hard_action(prompt):
                 "name": match.group("name").strip(),
             }
 
-    # --------------------------------------
     # KICK MEMBER
-    # --------------------------------------
-
     match = re.fullmatch(
         r"kick\s+(?:member\s+)?(?P<target><@!?\d{15,22}>)",
         text,
@@ -1219,10 +1287,7 @@ def parse_hard_action(prompt):
             "target": match.group("target"),
         }
 
-    # --------------------------------------
     # BAN MEMBER
-    # --------------------------------------
-
     match = re.fullmatch(
         r"ban\s+(?:member\s+)?(?P<target><@!?\d{15,22}>)",
         text,
@@ -1236,12 +1301,7 @@ def parse_hard_action(prompt):
             "target": match.group("target"),
         }
 
-    # --------------------------------------
     # TIMEOUT MEMBER
-    # Example: timeout @member 10
-    # Duration is in minutes.
-    # --------------------------------------
-
     match = re.fullmatch(
         r"timeout\s+(?P<target><@!?\d{15,22}>)\s+"
         r"(?P<minutes>\d+)",
@@ -1257,10 +1317,7 @@ def parse_hard_action(prompt):
             "minutes": int(match.group("minutes")),
         }
 
-    # --------------------------------------
     # DELETE CHANNEL
-    # --------------------------------------
-
     match = re.fullmatch(
         r"delete\s+channel\s+(?P<target><#\d{15,22}>)",
         text,
@@ -1514,6 +1571,7 @@ async def handle_hard_action_request(message, action):
         )
 
         if category:
+
             description += (
                 f"\nInside category: **{category}**"
             )
@@ -1571,6 +1629,54 @@ async def handle_hard_action_request(message, action):
     await message.channel.send(
         embed=embed,
         view=view,
+)
+
+# ==========================================
+# ADDITIONAL CODING REQUEST DETECTION
+# ==========================================
+
+# These keywords allow natural project-inspection
+# requests to reach the coding agent.
+
+EXTRA_CODING_KEYWORDS = [
+    "inspect",
+    "inspection",
+    "project",
+    "projects",
+    "files",
+    "file structure",
+    "implementation plan",
+    "implementation",
+    "analyze project",
+    "analyse project",
+    "project analysis",
+    "read files",
+    "check files",
+    "check project",
+    "project check",
+    "current configuration",
+    "configuration inspect",
+    "codebase",
+    "code base",
+    "architecture",
+    "debug",
+    "debugging",
+    "review project",
+    "review code",
+    "current code",
+]
+
+
+# Override the earlier detection function.
+def looks_like_coding_request(prompt):
+
+    text = prompt.lower()
+
+    all_keywords = CODING_KEYWORDS + EXTRA_CODING_KEYWORDS
+
+    return any(
+        keyword in text
+        for keyword in all_keywords
     )
 
 
@@ -1621,7 +1727,7 @@ async def on_message(message):
 
             return
 
-        # Developer coding requests.
+        # Developer coding and project inspection.
         if looks_like_coding_request(prompt):
 
             await handle_developer_request(
@@ -1716,4 +1822,4 @@ if __name__ == "__main__":
 
         logger.info(
             "Elyx Trading bot stopped."
-        )
+)

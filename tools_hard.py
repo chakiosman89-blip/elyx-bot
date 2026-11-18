@@ -1,7 +1,12 @@
 import discord
 
+
+# ================= CONFIGURATION =================
+
 DEVELOPER_ROLE_ID = 1572448688700391454
 
+
+# ================= ACCESS CONTROL =================
 
 class HardAccessError(Exception):
     pass
@@ -10,6 +15,12 @@ class HardAccessError(Exception):
 def has_developer_access(member):
     if not isinstance(member, discord.Member):
         return False
+
+    if member.guild is None:
+        return False
+
+    if member.id == member.guild.owner_id:
+        return True
 
     return any(
         role.id == DEVELOPER_ROLE_ID
@@ -24,195 +35,214 @@ def require_developer_access(member):
         )
 
 
-def check_bot_permissions(guild, permission_name):
-    if guild is None or guild.me is None:
-        return False
+# ================= PERMISSION CHECKS =================
 
-    return bool(
-        getattr(guild.me.guild_permissions, permission_name, False)
-    )
+def check_bot_permissions(guild, permission):
+    bot_member = guild.me
 
+    if bot_member is None:
+        raise HardAccessError("Bot member information unavailable.")
 
-def check_member_permission(member, permission_name):
-    if not isinstance(member, discord.Member):
-        return False
-
-    return bool(
-        getattr(member.guild_permissions, permission_name, False)
-    )
+    if not getattr(bot_member.guild_permissions, permission, False):
+        raise HardAccessError(
+            f"Bot is missing permission: {permission}"
+        )
 
 
-def get_developer_status(member):
-    access = has_developer_access(member)
-
-    return {
-        "user_id": member.id,
-        "developer_access": access,
-        "role_id": DEVELOPER_ROLE_ID,
-        "status": "AUTHORIZED" if access else "DENIED"
-    }
+def check_member_permission(member, permission):
+    if not getattr(member.guild_permissions, permission, False):
+        raise HardAccessError(
+            f"Member is missing permission: {permission}"
+        )
 
 
-async def get_target_member(guild, user_id):
-    member = guild.get_member(int(user_id))
+def get_target_member(guild, target):
+    if isinstance(target, discord.Member):
+        return target
+
+    member = guild.get_member(int(target))
 
     if member is None:
-        try:
-            member = await guild.fetch_member(int(user_id))
-        except discord.NotFound:
-            return None
+        raise HardAccessError("Member not found in this server.")
 
     return member
 
 
-def check_hierarchy(actor, target, bot_member):
-    if target.id == actor.id:
-        raise HardAccessError("You cannot target yourself.")
+def check_hierarchy(guild, actor, target):
+    bot_member = guild.me
 
-    if target.id == actor.guild.owner_id:
+    if bot_member is None:
+        raise HardAccessError("Bot member information unavailable.")
+
+    if target.id == guild.owner_id:
         raise HardAccessError("Server owner cannot be targeted.")
 
-    if target.top_role >= actor.top_role:
-        raise HardAccessError(
-            "Target member has an equal or higher role."
-        )
+    if target.id == bot_member.id:
+        raise HardAccessError("Bot cannot target itself.")
 
     if target.top_role >= bot_member.top_role:
         raise HardAccessError(
-            "Bot role must be higher than target member."
+            "Target has an equal or higher role than the bot."
         )
 
-
-async def kick_member(guild, actor, user_id, reason=None):
-    require_developer_access(actor)
-
-    if not check_bot_permissions(guild, "kick_members"):
-        raise HardAccessError("Bot needs Kick Members permission.")
-
-    target = await get_target_member(guild, user_id)
-
-    if target is None:
-        raise HardAccessError("Member not found.")
-
-    check_hierarchy(actor, target, guild.me)
-
-    await target.kick(reason=reason or "Elyx Developer action")
-
-    return f"Successfully kicked {target}."
-
-
-async def ban_member(guild, actor, user_id, reason=None):
-    require_developer_access(actor)
-
-    if not check_bot_permissions(guild, "ban_members"):
-        raise HardAccessError("Bot needs Ban Members permission.")
-
-    target = await get_target_member(guild, user_id)
-
-    if target is None:
-        raise HardAccessError("Member not found.")
-
-    check_hierarchy(actor, target, guild.me)
-
-    await target.ban(
-        reason=reason or "Elyx Developer action",
-        delete_message_seconds=0
-    )
-
-    return f"Successfully banned {target}."
-
-
-async def change_nickname(guild, actor, user_id, nickname):
-    require_developer_access(actor)
-
-    if not check_bot_permissions(guild, "manage_nicknames"):
+    if actor.id != guild.owner_id and target.top_role >= actor.top_role:
         raise HardAccessError(
-            "Bot needs Manage Nicknames permission."
+            "Target has an equal or higher role than you."
         )
 
-    target = await get_target_member(guild, user_id)
 
-    if target is None:
-        raise HardAccessError("Member not found.")
+# ================= MODERATION =================
 
-    check_hierarchy(actor, target, guild.me)
+async def kick_member(guild, actor, target, reason=None):
 
-    await target.edit(
-        nick=nickname,
-        reason="Elyx Developer action"
+    require_developer_access(actor)
+    check_bot_permissions(guild, "kick_members")
+
+    member = get_target_member(guild, target)
+    check_hierarchy(guild, actor, member)
+
+    await member.kick(
+        reason=reason or f"Elyx Developer action by {actor}"
     )
 
-    return f"Nickname updated for {target}."
+    return f"{member} was kicked successfully."
 
+
+async def ban_member(guild, actor, target, reason=None):
+
+    require_developer_access(actor)
+    check_bot_permissions(guild, "ban_members")
+
+    member = get_target_member(guild, target)
+    check_hierarchy(guild, actor, member)
+
+    await member.ban(
+        reason=reason or f"Elyx Developer action by {actor}"
+    )
+
+    return f"{member} was banned successfully."
+
+
+async def change_nickname(guild, actor, target, nickname):
+
+    require_developer_access(actor)
+    check_bot_permissions(guild, "manage_nicknames")
+
+    member = get_target_member(guild, target)
+    check_hierarchy(guild, actor, member)
+
+    if nickname is not None and len(nickname) > 32:
+        raise HardAccessError("Nickname cannot exceed 32 characters.")
+
+    await member.edit(
+        nick=nickname,
+        reason=f"Elyx Developer action by {actor}"
+    )
+
+    return f"Nickname updated for {member}."
+
+
+# ================= CHANNEL MANAGEMENT =================
 
 async def create_text_channel(guild, actor, name):
-    require_developer_access(actor)
 
-    if not check_bot_permissions(guild, "manage_channels"):
-        raise HardAccessError("Bot needs Manage Channels permission.")
+    require_developer_access(actor)
+    check_bot_permissions(guild, "manage_channels")
+
+    name = name.strip().lower().replace(" ", "-")
+
+    if not name or len(name) > 100:
+        raise HardAccessError("Invalid channel name.")
 
     channel = await guild.create_text_channel(
         name=name,
-        reason="Elyx Developer action"
+        reason=f"Elyx Developer action by {actor}"
     )
 
-    return f"Created channel {channel.mention}."
+    return f"Channel #{channel.name} created successfully."
 
 
 async def delete_channel(guild, actor, channel_id):
-    require_developer_access(actor)
 
-    if not check_bot_permissions(guild, "manage_channels"):
-        raise HardAccessError("Bot needs Manage Channels permission.")
+    require_developer_access(actor)
+    check_bot_permissions(guild, "manage_channels")
 
     channel = guild.get_channel(int(channel_id))
 
     if channel is None:
         raise HardAccessError("Channel not found.")
 
-    await channel.delete(reason="Elyx Developer action")
+    await channel.delete(
+        reason=f"Elyx Developer action by {actor}"
+    )
 
-    return "Channel deleted."
+    return "Channel deleted successfully."
 
+
+# ================= ROLE MANAGEMENT =================
 
 async def create_role(guild, actor, name):
-    require_developer_access(actor)
 
-    if not check_bot_permissions(guild, "manage_roles"):
-        raise HardAccessError("Bot needs Manage Roles permission.")
+    require_developer_access(actor)
+    check_bot_permissions(guild, "manage_roles")
+
+    name = name.strip()
+
+    if not name or len(name) > 100:
+        raise HardAccessError("Invalid role name.")
 
     role = await guild.create_role(
         name=name,
-        reason="Elyx Developer action"
+        reason=f"Elyx Developer action by {actor}"
     )
 
-    return f"Created role: {role.name}."
+    return f"Role {role.name} created successfully."
 
 
-async def set_member_role(guild, actor, user_id, role_id, add=True):
+async def set_member_role(
+    guild,
+    actor,
+    member_id,
+    role_id,
+    add=True
+):
+
     require_developer_access(actor)
+    check_bot_permissions(guild, "manage_roles")
 
-    if not check_bot_permissions(guild, "manage_roles"):
-        raise HardAccessError("Bot needs Manage Roles permission.")
-
-    target = await get_target_member(guild, user_id)
-
-    if target is None:
-        raise HardAccessError("Member not found.")
+    member = get_target_member(guild, member_id)
+    check_hierarchy(guild, actor, member)
 
     role = guild.get_role(int(role_id))
 
     if role is None:
         raise HardAccessError("Role not found.")
 
-    if role >= guild.me.top_role:
+    bot_member = guild.me
+
+    if role.is_default() or role.managed:
+        raise HardAccessError("This role cannot be assigned manually.")
+
+    if role >= bot_member.top_role:
         raise HardAccessError(
-            "Bot role must be higher than the selected role."
+            "Bot cannot manage this role due to role hierarchy."
+        )
+
+    if actor.id != guild.owner_id and role >= actor.top_role:
+        raise HardAccessError(
+            "You cannot manage a role equal to or higher than your top role."
         )
 
     if add:
-        await target.add_roles(role, reason="Elyx Developer action")
-        return f"Added {role.name} to {target}."
+        await member.add_roles(
+            role,
+            reason=f"Elyx Developer action by {actor}"
+        )
+        return f"Role {role.name} added to {member}."
 
-    await target.remove_roles(role, reason="Elyx Developer action")
-    return f"Removed {role.name} from {target}."
+    await member.remove_roles(
+        role,
+        reason=f"Elyx Developer action by {actor}"
+    )
+
+    return f"Role {role.name} removed from {member}."

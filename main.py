@@ -1,21 +1,24 @@
 # ============================================================
 # ELYX TRADING AI DEVELOPER
-# VERSION 1.0
-# PART 1/5 — FOUNDATION & CONFIGURATION
+# PART 1/5 — CORE, DATABASE, AI & GITHUB
 # ============================================================
 
 import os
 import re
 import json
 import ast
-import asyncio
-import logging
+import time
+import base64
 import hashlib
-from datetime import datetime, timezone
+import asyncio
+import sqlite3
+import logging
+from datetime import datetime, timezone, timedelta
 
+import aiohttp
 import discord
 from discord.ext import commands
-import aiohttp
+from discord import app_commands
 
 
 # ============================================================
@@ -33,258 +36,182 @@ GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
 
 DEVELOPER_ROLE_ID = 1572448688700391454
 
+BOT_NAME = "Elyx Trading"
+DATABASE_NAME = "elyx_data.db"
+
 PREFIX = "!"
 
-MAX_MESSAGE_LENGTH = 1800
-MAX_PROJECT_SIZE = 30000
-MAX_FILE_SIZE = 100000
-
-AI_TIMEOUT = 90
-
-GEMINI_MODEL = os.getenv(
-    "GEMINI_MODEL",
-    "gemini-2.5-flash"
-)
-
-GROQ_MODEL = os.getenv(
-    "GROQ_MODEL",
-    "openai/gpt-oss-20b"
-)
-
-
-# ============================================================
-# LOGGING
-# ============================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-)
-
-logger = logging.getLogger("ELYX_DEVELOPER")
-
-
-# ============================================================
-# DISCORD BOT
-# ============================================================
-
-intents = discord.Intents.default()
-
-intents.guilds = True
-intents.members = True
-intents.messages = True
-intents.message_content = True
-
-bot = commands.Bot(
-    command_prefix=PREFIX,
-    intents=intents,
-    help_command=None
-)
-
-
-# ============================================================
-# GLOBAL SYSTEM STATE
-# ============================================================
-
-HTTP_SESSION = None
-
-BOT_STARTED = False
-
-PROJECT_LOCK = asyncio.Lock()
-
-USER_CONVERSATIONS = {}
-
-PROJECT_MEMORY = []
-
-PENDING_CHANGES = {}
-
-ACTIVE_TASKS = {}
-
-AI_PROVIDER_ORDER = ["gemini", "groq"]
-
-
-# ============================================================
-# PROJECT FILE CONFIGURATION
-# ============================================================
-
-PROJECT_FILES = [
-    "main.py",
-    "requirements.txt"
-]
-
-ALLOWED_FILE_EXTENSIONS = (
-    ".py",
-    ".txt",
-    ".json",
-    ".md",
-    ".yml",
-    ".yaml"
-)
-
-
-# ============================================================
-# AI DEVELOPER SYSTEM PROMPT
-# ============================================================
-
-SYSTEM_PROMPT = """
-You are ELYX TRADING AI DEVELOPER.
-
-You are an autonomous AI software development assistant.
-
-Your responsibilities:
-
-1. Understand natural language requests.
-2. Inspect actual project files supplied to you.
-3. Never invent files or pretend to have inspected files.
-4. Find bugs and explain their causes.
-5. Design new software features.
-6. Generate complete code changes.
-7. Maintain compatibility with existing project code.
-8. Check dependencies and requirements.
-9. Validate generated Python syntax.
-10. Prepare changes for human approval.
-11. Never claim that a change was saved unless GitHub confirms it.
-
-IMPORTANT RULES:
-
-- Follow the developer's instructions.
-- Preserve existing working features.
-- Do not silently remove existing code.
-- Do not expose API keys, tokens or secrets.
-- Do not execute untrusted generated code.
-- Ask for clarification when a request is ambiguous.
-- Explain errors in simple language.
-- Prefer complete, integrated implementations.
-- Never fabricate test results.
-
-You are the development brain of ELYX TRADING.
-"""
-
-
-# ============================================================
-# GENERAL HELPERS
-# ============================================================
-
-def utc_now():
-    return datetime.now(timezone.utc)
-
-
-def is_configured(value):
-    return bool(value and value.strip())
-
-
-def get_developer_access(member):
-
-    if member is None:
-        return False
-
-    if member.guild.owner_id == member.id:
-        return True
-
-    return any(
-        role.id == DEVELOPER_ROLE_ID
-        for role in member.roles
-    )
-
-
-def safe_text(text):
-
-    if not isinstance(text, str):
-        return ""
-
-    return text[:MAX_MESSAGE_LENGTH]
-
-
-def calculate_hash(content):
-
-    return hashlib.sha256(
-        content.encode("utf-8")
-    ).hexdigest()
-
-
-def split_message(text, limit=1900):
-
-    parts = []
-
-    while text:
-
-        if len(text) <= limit:
-            parts.append(text)
-            break
-
-        position = text.rfind("\n", 0, limit)
-
-        if position < 1:
-            position = limit
-
-        parts.append(text[:position])
-        text = text[position:].lstrip()
-
-    return parts
-
-
-# ============================================================
-# EMBED SYSTEM
-# ============================================================
-
-def create_embed(title, description, color=0x8A2BE2):
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=color,
-        timestamp=utc_now()
-    )
-
-    embed.set_footer(
-        text="ELYX TRADING • AI DEVELOPER"
-    )
-
-    return embed
-
-
-# ============================================================
-# CONFIGURATION CHECK
-# ============================================================
-
-def check_configuration():
-
-    missing = []
-
-    if not is_configured(BOT_TOKEN):
-        missing.append("DISCORD_TOKEN")
-
-    if not is_configured(GEMINI_API_KEY) and not is_configured(GROQ_API_KEY):
-        missing.append("GEMINI_API_KEY or GROQ_API_KEY")
-
-    if not is_configured(GITHUB_TOKEN):
-        missing.append("GITHUB_TOKEN")
-
-    if not is_configured(GITHUB_REPOSITORY):
-        missing.append("GITHUB_REPOSITORY")
-
-    return missing
-
-
-# ============================================================
-# END OF PART 1
-# ============================================================
-
-# ============================================================
-# PART 2/5 — AI BRAIN
-# ============================================================
-
-
-# ============================================================
-# AI PROVIDER CONFIGURATION
-# ============================================================
+MAX_AI_OUTPUT = 12000
+MAX_PROJECT_CONTEXT = 18000
+
+GEMINI_MODEL = "gemini-2.5-flash"
+GROQ_MODEL = "openai/gpt-oss-20b"
 
 GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_MODEL}:generateContent"
+    "https://generativelanguage.googleapis.com/"
+    "v1beta/models/{model}:generateContent"
 )
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+GITHUB_API = "https://api.github.com"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(message)s"
+)
+
+logger = logging.getLogger("ELYX")
+
+
+# ============================================================
+# GLOBAL STATE
+# ============================================================
+
+http_session = None
+
+pending_approvals = {}
+active_developments = {}
+
+bot_ready = False
+
+
+# ============================================================
+# DATABASE SYSTEM
+# ============================================================
+
+def get_database():
+
+    connection = sqlite3.connect(DATABASE_NAME)
+
+    connection.row_factory = sqlite3.Row
+
+    return connection
+
+
+def initialize_database():
+
+    connection = get_database()
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_memory (
+            user_id TEXT PRIMARY KEY,
+            username TEXT,
+            memory TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id TEXT,
+            user_id TEXT,
+            moderator_id TEXT,
+            reason TEXT,
+            created_at TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS message_counts (
+            guild_id TEXT,
+            user_id TEXT,
+            count INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invite_tracking (
+            guild_id TEXT,
+            user_id TEXT,
+            invite_count INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_value TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS development_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            developer_id TEXT,
+            request TEXT,
+            status TEXT,
+            created_at TEXT
+        )
+    """)
+
+    connection.commit()
+    connection.close()
+
+    logger.info("ELYX DATABASE INITIALIZED")
+
+
+def save_user_memory(user_id, username, memory):
+
+    connection = get_database()
+
+    connection.execute("""
+        INSERT INTO user_memory
+        (user_id, username, memory, updated_at)
+        VALUES (?, ?, ?, ?)
+
+        ON CONFLICT(user_id)
+        DO UPDATE SET
+            username = excluded.username,
+            memory = excluded.memory,
+            updated_at = excluded.updated_at
+    """, (
+        str(user_id),
+        str(username),
+        str(memory),
+        datetime.now(timezone.utc).isoformat()
+    ))
+
+    connection.commit()
+    connection.close()
+
+
+def get_user_memory(user_id):
+
+    connection = get_database()
+
+    row = connection.execute(
+        "SELECT memory FROM user_memory WHERE user_id = ?",
+        (str(user_id),)
+    ).fetchone()
+
+    connection.close()
+
+    return row["memory"] if row else ""
+
+
+def record_development(developer_id, request, status):
+
+    connection = get_database()
+
+    connection.execute("""
+        INSERT INTO development_history
+        (developer_id, request, status, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (
+        str(developer_id),
+        str(request),
+        str(status),
+        datetime.now(timezone.utc).isoformat()
+    ))
+
+    connection.commit()
+    connection.close()
 
 
 # ============================================================
@@ -293,364 +220,243 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 async def get_http_session():
 
-    global HTTP_SESSION
+    global http_session
 
-    if HTTP_SESSION is None or HTTP_SESSION.closed:
+    if http_session is None or http_session.closed:
 
-        timeout = aiohttp.ClientTimeout(
-            total=AI_TIMEOUT
-        )
+        timeout = aiohttp.ClientTimeout(total=90)
 
-        HTTP_SESSION = aiohttp.ClientSession(
+        http_session = aiohttp.ClientSession(
             timeout=timeout
         )
 
-    return HTTP_SESSION
+    return http_session
 
 
 # ============================================================
-# GEMINI AI
+# AI RESPONSE PARSER
 # ============================================================
 
-async def ask_gemini(messages):
+def clean_ai_response(text):
 
-    if not is_configured(GEMINI_API_KEY):
-        raise RuntimeError("Gemini API key is not configured.")
+    if not text:
+        return ""
+
+    text = text.strip()
+
+    text = re.sub(
+        r"^```(?:python|json|text)?\s*",
+        "",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    text = re.sub(r"\s*```$", "", text)
+
+    return text.strip()
+
+
+# ============================================================
+# GEMINI AI CONNECTION
+# ============================================================
+
+async def ask_gemini(prompt, system_instruction=None):
+
+    if not GEMINI_API_KEY:
+        return None
 
     session = await get_http_session()
 
-    contents = []
-
-    for message in messages:
-
-        role = message.get("role", "user")
-        content = message.get("content", "")
-
-        if role == "system":
-            continue
-
-        gemini_role = (
-            "model" if role == "assistant" else "user"
-        )
-
-        contents.append({
-            "role": gemini_role,
-            "parts": [
-                {"text": str(content)}
-            ]
-        })
-
-    payload = {
-        "systemInstruction": {
-            "parts": [
-                {"text": SYSTEM_PROMPT}
-            ]
-        },
-        "contents": contents,
-        "generationConfig": {
-            "temperature": 0.5,
-            "maxOutputTokens": 8192
-        }
-    }
+    url = GEMINI_URL.format(model=GEMINI_MODEL)
 
     headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY
+        "Content-Type": "application/json"
     }
-
-    async with session.post(
-        GEMINI_URL,
-        headers=headers,
-        json=payload
-    ) as response:
-
-        if response.status != 200:
-
-            error_text = await response.text()
-
-            logger.error(
-                "Gemini HTTP error: %s",
-                response.status
-            )
-
-            raise RuntimeError(
-                f"Gemini error {response.status}: "
-                f"{error_text[:500]}"
-            )
-
-        data = await response.json()
-
-    candidates = data.get("candidates", [])
-
-    if not candidates:
-        raise RuntimeError("Gemini returned an empty response.")
-
-    parts = (
-        candidates[0]
-        .get("content", {})
-        .get("parts", [])
-    )
-
-    answer = "".join(
-        part.get("text", "")
-        for part in parts
-    )
-
-    if not answer.strip():
-        raise RuntimeError("Gemini response contained no text.")
-
-    return answer.strip()
-
-
-# ============================================================
-# GROQ AI
-# ============================================================
-
-async def ask_groq(messages):
-
-    if not is_configured(GROQ_API_KEY):
-        raise RuntimeError("Groq API key is not configured.")
-
-    session = await get_http_session()
-
-    groq_messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT
-        }
-    ]
-
-    for message in messages:
-
-        role = message.get("role", "user")
-
-        if role not in ("user", "assistant"):
-            continue
-
-        groq_messages.append({
-            "role": role,
-            "content": str(message.get("content", ""))
-        })
 
     payload = {
-        "model": GROQ_MODEL,
-        "messages": groq_messages,
-        "temperature": 0.5,
-        "max_tokens": 8192
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": MAX_AI_OUTPUT
+        }
     }
+
+    if system_instruction:
+
+        payload["systemInstruction"] = {
+            "parts": [
+                {
+                    "text": system_instruction
+                }
+            ]
+        }
+
+    try:
+
+        async with session.post(
+            url,
+            headers=headers,
+            params={"key": GEMINI_API_KEY},
+            json=payload
+        ) as response:
+
+            result = await response.json()
+
+            if response.status != 200:
+
+                logger.error(
+                    "GEMINI ERROR: %s",
+                    result
+                )
+
+                return None
+
+            candidates = result.get("candidates", [])
+
+            if not candidates:
+                return None
+
+            parts = candidates[0].get(
+                "content", {}
+            ).get("parts", [])
+
+            output = "".join(
+                part.get("text", "")
+                for part in parts
+            )
+
+            return clean_ai_response(output)
+
+    except Exception:
+
+        logger.exception("GEMINI CONNECTION FAILED")
+
+        return None
+
+
+# ============================================================
+# GROQ AI CONNECTION
+# ============================================================
+
+async def ask_groq(prompt, system_instruction=None):
+
+    if not GROQ_API_KEY:
+        return None
+
+    session = await get_http_session()
 
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    async with session.post(
-        GROQ_URL,
-        headers=headers,
-        json=payload
-    ) as response:
-
-        if response.status != 200:
-
-            error_text = await response.text()
-
-            logger.error(
-                "Groq HTTP error: %s",
-                response.status
-            )
-
-            raise RuntimeError(
-                f"Groq error {response.status}: "
-                f"{error_text[:500]}"
-            )
-
-        data = await response.json()
-
-    choices = data.get("choices", [])
-
-    if not choices:
-        raise RuntimeError("Groq returned an empty response.")
-
-    answer = (
-        choices[0]
-        .get("message", {})
-        .get("content", "")
-    )
-
-    if not answer.strip():
-        raise RuntimeError("Groq response contained no text.")
-
-    return answer.strip()
-
-
-# ============================================================
-# AI PROVIDER FALLBACK
-# ============================================================
-
-async def generate_ai_reply(messages):
-
-    errors = []
-
-    for provider in AI_PROVIDER_ORDER:
-
-        try:
-
-            if provider == "gemini":
-
-                answer = await ask_gemini(messages)
-
-            elif provider == "groq":
-
-                answer = await ask_groq(messages)
-
-            else:
-                continue
-
-            logger.info(
-                "AI response generated using %s",
-                provider
-            )
-
-            return answer
-
-        except Exception as error:
-
-            logger.warning(
-                "%s provider failed: %s",
-                provider,
-                str(error)[:300]
-            )
-
-            errors.append(
-                f"{provider}: {str(error)[:200]}"
-            )
-
-    raise RuntimeError(
-        "All AI providers failed. "
-        + " | ".join(errors)
-    )
-
-
-# ============================================================
-# CONVERSATION MEMORY
-# ============================================================
-
-def get_user_history(user_id):
-
-    history = USER_CONVERSATIONS.get(
-        user_id,
-        []
-    )
-
-    return history[-12:]
-
-
-def save_user_message(user_id, role, content):
-
-    if user_id not in USER_CONVERSATIONS:
-
-        USER_CONVERSATIONS[user_id] = []
-
-    USER_CONVERSATIONS[user_id].append({
-
-        "role": role,
-
-        "content": str(content)[:8000],
-
-        "time": utc_now().isoformat()
-
-    })
-
-    USER_CONVERSATIONS[user_id] = (
-        USER_CONVERSATIONS[user_id][-20:]
-    )
-
-
-# ============================================================
-# NORMAL AI RESPONSE
-# ============================================================
-
-async def get_normal_ai_response(user_id, user_message):
-
-    history = get_user_history(user_id)
-
     messages = []
 
-    for item in history:
+    if system_instruction:
 
         messages.append({
-
-            "role": item["role"],
-
-            "content": item["content"]
-
+            "role": "system",
+            "content": system_instruction
         })
 
     messages.append({
-
         "role": "user",
-
-        "content": user_message
-
+        "content": prompt
     })
 
-    answer = await generate_ai_reply(messages)
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": MAX_AI_OUTPUT
+    }
 
-    save_user_message(
-        user_id,
-        "user",
-        user_message
+    try:
+
+        async with session.post(
+            GROQ_URL,
+            headers=headers,
+            json=payload
+        ) as response:
+
+            result = await response.json()
+
+            if response.status != 200:
+
+                logger.error(
+                    "GROQ ERROR: %s",
+                    result
+                )
+
+                return None
+
+            choices = result.get("choices", [])
+
+            if not choices:
+                return None
+
+            output = choices[0]["message"]["content"]
+
+            return clean_ai_response(output)
+
+    except Exception:
+
+        logger.exception("GROQ CONNECTION FAILED")
+
+        return None
+
+
+# ============================================================
+# AI ROUTER — GEMINI + GROQ
+# ============================================================
+
+async def ask_ai(prompt, system_instruction=None):
+
+    result = await ask_gemini(
+        prompt,
+        system_instruction
     )
 
-    save_user_message(
-        user_id,
-        "assistant",
-        answer
+    if result:
+        return result
+
+    logger.warning(
+        "Gemini unavailable. Trying Groq..."
     )
 
-    return answer
+    result = await ask_groq(
+        prompt,
+        system_instruction
+    )
+
+    if result:
+        return result
+
+    return None
 
 
 # ============================================================
-# END OF PART 2
+# GITHUB CONNECTION
 # ============================================================
-
-# ============================================================
-# PART 3/5 — GITHUB PROJECT ENGINE
-# ============================================================
-
-import base64
-
-
-# ============================================================
-# GITHUB CONFIGURATION
-# ============================================================
-
-GITHUB_API = "https://api.github.com"
-
-GITHUB_ALLOWED_FILES = {
-    "main.py",
-    "requirements.txt"
-}
-
 
 def github_headers():
 
     return {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json"
+        "X-GitHub-Api-Version": "2022-11-28"
     }
 
 
 def github_file_url(filename):
-
-    if filename not in GITHUB_ALLOWED_FILES:
-        raise ValueError("This project file is not allowed.")
-
-    if not GITHUB_REPOSITORY or "/" not in GITHUB_REPOSITORY:
-        raise ValueError("Invalid GitHub repository configuration.")
 
     return (
         f"{GITHUB_API}/repos/"
@@ -658,16 +464,10 @@ def github_file_url(filename):
     )
 
 
-# ============================================================
-# GITHUB READ FILE
-# ============================================================
+async def github_get_file(filename):
 
-async def github_read_file(filename):
-
-    if not is_configured(GITHUB_TOKEN):
-        raise RuntimeError("GitHub token is missing.")
-
-    url = github_file_url(filename)
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        return None
 
     session = await get_http_session()
 
@@ -675,279 +475,1426 @@ async def github_read_file(filename):
         "ref": GITHUB_BRANCH
     }
 
-    async with session.get(
-        url,
-        headers=github_headers(),
-        params=params
-    ) as response:
+    try:
 
-        if response.status == 404:
-            return {
-                "success": False,
-                "exists": False,
-                "content": "",
-                "sha": None,
-                "message": "File not found."
-            }
+        async with session.get(
+            github_file_url(filename),
+            headers=github_headers(),
+            params=params
+        ) as response:
 
-        if response.status != 200:
+            if response.status == 404:
+                return None
 
-            error = await response.text()
+            result = await response.json()
 
-            raise RuntimeError(
-                f"GitHub read error {response.status}: "
-                f"{error[:300]}"
-            )
+            if response.status != 200:
 
-        data = await response.json()
-
-    if data.get("type") != "file":
-        raise RuntimeError("GitHub path is not a file.")
-
-    encoded = data.get("content", "")
-
-    decoded = base64.b64decode(
-        encoded.replace("\n", "")
-    ).decode("utf-8")
-
-    return {
-        "success": True,
-        "exists": True,
-        "content": decoded,
-        "sha": data.get("sha"),
-        "message": "File loaded successfully."
-    }
-
-
-# ============================================================
-# READ COMPLETE PROJECT
-# ============================================================
-
-async def inspect_project():
-
-    project = {}
-
-    errors = []
-
-    total_size = 0
-
-    for filename in sorted(GITHUB_ALLOWED_FILES):
-
-        try:
-
-            result = await github_read_file(filename)
-
-            if not result["success"]:
-                project[filename] = {
-                    "exists": False,
-                    "content": "",
-                    "sha": None
-                }
-                continue
-
-            content = result["content"]
-
-            remaining = MAX_PROJECT_SIZE - total_size
-
-            if remaining <= 0:
-                content = "[PROJECT SIZE LIMIT REACHED]"
-
-            elif len(content) > remaining:
-                content = (
-                    content[:remaining]
-                    + "\n[CONTENT TRUNCATED]"
+                logger.error(
+                    "GITHUB READ ERROR: %s",
+                    result
                 )
 
-            total_size += len(content)
+                return None
 
-            project[filename] = {
-                "exists": True,
-                "content": content,
-                "sha": result["sha"]
+            encoded = result.get("content", "")
+
+            decoded = base64.b64decode(
+                encoded.replace("\n", "")
+            ).decode("utf-8")
+
+            return {
+                "name": filename,
+                "content": decoded,
+                "sha": result.get("sha")
             }
 
-        except Exception as error:
+    except Exception:
 
-            errors.append(
-                f"{filename}: {str(error)[:200]}"
-            )
+        logger.exception("GITHUB READ FAILED")
 
-    return {
-        "files": project,
-        "errors": errors,
-        "total_chars": total_size
-    }
+        return None
 
-
-# ============================================================
-# GITHUB CREATE / UPDATE FILE
-# ============================================================
 
 async def github_save_file(
     filename,
-    new_content,
-    approved=False,
-    commit_message=None,
-    expected_sha=None
+    content,
+    commit_message,
+    existing_sha=None
 ):
 
-    if not approved:
-        raise PermissionError(
-            "Human approval is required before saving."
-        )
-
-    if filename not in GITHUB_ALLOWED_FILES:
-        raise ValueError("File is not in the allowed list.")
-
-    if not isinstance(new_content, str):
-        raise TypeError("File content must be text.")
-
-    if len(new_content) > MAX_FILE_SIZE:
-        raise ValueError("File exceeds maximum allowed size.")
-
-    if filename.endswith(".py"):
-
-        try:
-            ast.parse(new_content)
-        except SyntaxError as error:
-            raise ValueError(
-                f"Python syntax error: {error}"
-            )
-
-    if filename == "requirements.txt":
-
-        for line in new_content.splitlines():
-
-            line = line.strip()
-
-            if not line or line.startswith("#"):
-                continue
-
-            if not re.match(
-                r"^[A-Za-z0-9_.-]+"
-                r"([<>=!~]+[A-Za-z0-9_.+-]+)?$",
-                line
-            ):
-                raise ValueError(
-                    f"Invalid dependency line: {line[:100]}"
-                )
-
-    url = github_file_url(filename)
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        return False
 
     session = await get_http_session()
 
-    # Fetch the latest version before committing.
-    async with session.get(
-        url,
-        headers=github_headers(),
-        params={"ref": GITHUB_BRANCH}
-    ) as response:
-
-        if response.status == 200:
-
-            current = await response.json()
-
-            current_sha = current.get("sha")
-
-            if expected_sha and current_sha != expected_sha:
-                raise RuntimeError(
-                    "GitHub file changed after approval. "
-                    "Please inspect and approve the latest version."
-                )
-
-        elif response.status == 404:
-
-            current_sha = None
-
-            if expected_sha:
-                raise RuntimeError(
-                    "File was removed after approval."
-                )
-
-        else:
-
-            error = await response.text()
-
-            raise RuntimeError(
-                f"GitHub pre-save check failed: "
-                f"{response.status} {error[:300]}"
-            )
-
     encoded_content = base64.b64encode(
-        new_content.encode("utf-8")
-    ).decode("ascii")
+        content.encode("utf-8")
+    ).decode("utf-8")
 
     payload = {
-        "message": (
-            commit_message
-            or f"Update {filename} using Elyx AI Developer"
-        ),
+        "message": commit_message,
         "content": encoded_content,
         "branch": GITHUB_BRANCH
     }
 
-    if current_sha:
-        payload["sha"] = current_sha
+    if existing_sha:
+        payload["sha"] = existing_sha
 
-    async with session.put(
-        url,
-        headers=github_headers(),
-        json=payload
-    ) as response:
+    try:
 
-        if response.status not in (200, 201):
+        async with session.put(
+            github_file_url(filename),
+            headers=github_headers(),
+            json=payload
+        ) as response:
 
-            error = await response.text()
+            result = await response.json()
 
-            raise RuntimeError(
-                f"GitHub save failed: "
-                f"{response.status} {error[:400]}"
+            if response.status not in (200, 201):
+
+                logger.error(
+                    "GITHUB SAVE ERROR: %s",
+                    result
+                )
+
+                return False
+
+            logger.info(
+                "GITHUB FILE SAVED: %s",
+                filename
             )
 
-        result = await response.json()
+            return True
+
+    except Exception:
+
+        logger.exception("GITHUB SAVE FAILED")
+
+        return False
+
+
+# ============================================================
+# PROJECT INSPECTION
+# ============================================================
+
+async def inspect_project():
+
+    main_file, requirements_file = await asyncio.gather(
+        github_get_file("main.py"),
+        github_get_file("requirements.txt")
+    )
+
+    if not main_file:
+        return None
 
     return {
-        "success": True,
-        "filename": filename,
-        "sha": result.get("content", {}).get("sha"),
-        "commit": result.get("commit", {}).get("html_url"),
-        "message": "GitHub file saved successfully."
+        "main.py": main_file,
+        "requirements.txt": requirements_file
     }
 
 
 # ============================================================
-# PROJECT SNAPSHOT FOR AI
+# BASIC VALIDATION
 # ============================================================
 
-async def build_project_context():
+def validate_python_code(code):
 
-    result = await inspect_project()
+    try:
 
-    sections = []
+        ast.parse(code)
 
-    for filename, info in result["files"].items():
+        return True, "Python syntax is valid."
 
-        if not info["exists"]:
-            sections.append(
-                f"\nFILE: {filename}\n[FILE DOES NOT EXIST]"
+    except SyntaxError as error:
+
+        return False, (
+            f"Syntax error on line {error.lineno}: "
+            f"{error.msg}"
+        )
+
+
+# ============================================================
+# END OF PART 1
+# ============================================================
+
+
+
+
+# ============================================================
+# ELYX TRADING AI DEVELOPER
+# PART 2/5 — AI CODING AGENT ENGINE
+# ============================================================
+
+
+# ============================================================
+# AI DEVELOPER IDENTITY
+# ============================================================
+
+AI_DEVELOPER_NAME = "ELYX AI DEVELOPER"
+
+AI_DEVELOPER_INSTRUCTIONS = """
+You are ELYX AI DEVELOPER.
+
+You are an advanced autonomous software development agent
+inside a Discord bot.
+
+Your job is to understand the developer's natural language
+instructions and develop the requested features.
+
+LANGUAGE:
+- Understand Hindi.
+- Understand Hinglish.
+- Understand English.
+- Reply in the language used by the developer.
+
+CORE ABILITIES:
+1. Inspect existing project files.
+2. Understand existing code architecture.
+3. Plan new features.
+4. Generate complete Python code.
+5. Modify existing code.
+6. Fix bugs.
+7. Improve existing systems.
+8. Update dependencies when necessary.
+9. Preserve existing working features.
+10. Explain proposed changes.
+
+IMPORTANT RULES:
+
+- Never assume a feature already exists.
+- Inspect the actual project before modifying it.
+- Never invent existing functions or files.
+- Do not unnecessarily rewrite working code.
+- Do not remove existing features without permission.
+- Do not silently change existing configuration.
+- Keep the project compatible with Python 3.13.
+- Use discord.py 2.6.4 compatibility.
+- Use asynchronous functions for network operations.
+- Avoid blocking the Discord event loop.
+- Handle exceptions properly.
+- Do not expose API keys, tokens or passwords.
+- Never place secrets inside generated source code.
+- Do not create unnecessary project files.
+
+PROJECT FILE POLICY:
+
+The two main source/configuration files are:
+
+1. main.py
+2. requirements.txt
+
+Runtime database files may be created automatically.
+
+When generating changes, return complete file contents
+for every file that needs modification.
+
+Do not return incomplete snippets as replacements.
+
+Do not claim code was tested unless it was actually tested.
+
+SECURITY:
+
+- Never generate code intended to steal tokens or passwords.
+- Never add hidden backdoors.
+- Never bypass Discord permissions.
+- Never perform destructive server actions without
+  explicit confirmation.
+- Never save generated code to GitHub without approval.
+
+OUTPUT:
+
+Return valid JSON whenever the developer requests
+a project modification.
+
+Do not wrap JSON in Markdown code fences.
+"""
+
+
+# ============================================================
+# PROJECT FILE LIMITS
+# ============================================================
+
+ALLOWED_PROJECT_FILES = {
+    "main.py",
+    "requirements.txt"
+}
+
+
+# ============================================================
+# PROJECT SNAPSHOT
+# ============================================================
+
+async def get_project_snapshot():
+
+    project = await inspect_project()
+
+    if not project:
+        return {
+            "success": False,
+            "error": "Could not read main.py from GitHub."
+        }
+
+    main_file = project.get("main.py")
+    requirements_file = project.get("requirements.txt")
+
+    if not main_file:
+        return {
+            "success": False,
+            "error": "main.py was not found."
+        }
+
+    snapshot = {
+        "main.py": {
+            "content": main_file["content"],
+            "sha": main_file["sha"]
+        }
+    }
+
+    if requirements_file:
+
+        snapshot["requirements.txt"] = {
+            "content": requirements_file["content"],
+            "sha": requirements_file["sha"]
+        }
+
+    else:
+
+        snapshot["requirements.txt"] = {
+            "content": "",
+            "sha": None
+        }
+
+    return {
+        "success": True,
+        "files": snapshot
+    }
+
+
+# ============================================================
+# PROJECT CONTEXT BUILDER
+# ============================================================
+
+def build_project_context(snapshot):
+
+    if not snapshot.get("success"):
+        return ""
+
+    files = snapshot.get("files", {})
+
+    context_parts = []
+
+    for filename, data in files.items():
+
+        content = data.get("content", "")
+
+        context_parts.append(
+            f"\n\n===== FILE: {filename} =====\n"
+            f"{content}"
+        )
+
+    context = "\n".join(context_parts)
+
+    if len(context) > MAX_PROJECT_CONTEXT:
+
+        context = (
+            context[:MAX_PROJECT_CONTEXT]
+            + "\n\n[PROJECT CONTEXT TRUNCATED]"
+        )
+
+    return context
+
+
+# ============================================================
+# JSON RESPONSE EXTRACTOR
+# ============================================================
+
+def extract_ai_json(response):
+
+    if not response:
+        return None
+
+    response = response.strip()
+
+    try:
+
+        parsed = json.loads(response)
+
+        if isinstance(parsed, dict):
+            return parsed
+
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(
+        r"\{[\s\S]*\}",
+        response
+    )
+
+    if not match:
+        return None
+
+    try:
+
+        parsed = json.loads(match.group(0))
+
+        if isinstance(parsed, dict):
+            return parsed
+
+    except json.JSONDecodeError:
+
+        return None
+
+    return None
+
+
+# ============================================================
+# REQUEST CLASSIFICATION
+# ============================================================
+
+async def understand_developer_request(
+    developer_message,
+    user_id=None
+):
+
+    memory = ""
+
+    if user_id is not None:
+        memory = get_user_memory(user_id)
+
+    prompt = f"""
+DEVELOPER MESSAGE:
+
+{developer_message}
+
+PREVIOUS DEVELOPER CONTEXT:
+
+{memory[:3000]}
+
+Identify the developer's intention.
+
+Possible intent categories:
+
+- create_feature
+- modify_feature
+- fix_bug
+- inspect_project
+- explain_project
+- discord_server_action
+- general_question
+- clarification_required
+
+Return ONLY valid JSON:
+
+{{
+    "intent": "category",
+    "understanding": "What the developer wants",
+    "target": "Feature, file or Discord object",
+    "needs_project_inspection": true,
+    "needs_discord_action": false,
+    "needs_code_changes": false,
+    "clarification": null
+}}
+
+Do not assume a request needs code changes if it is
+only a normal question.
+
+If important information is missing, ask for clarification.
+"""
+
+    response = await ask_ai(
+        prompt,
+        AI_DEVELOPER_INSTRUCTIONS
+    )
+
+    result = extract_ai_json(response)
+
+    if not result:
+
+        return {
+            "intent": "general_question",
+            "understanding": developer_message,
+            "target": None,
+            "needs_project_inspection": False,
+            "needs_discord_action": False,
+            "needs_code_changes": False,
+            "clarification": None
+        }
+
+    return result
+
+
+# ============================================================
+# DEVELOPMENT PLANNER
+# ============================================================
+
+async def create_development_plan(
+    developer_message,
+    snapshot
+):
+
+    project_context = build_project_context(snapshot)
+
+    if not project_context:
+
+        return {
+            "success": False,
+            "error": "Project files could not be inspected."
+        }
+
+    prompt = f"""
+DEVELOPER REQUEST:
+
+{developer_message}
+
+CURRENT PROJECT:
+
+{project_context}
+
+YOUR TASK:
+
+Understand the requested feature.
+
+Inspect the existing architecture.
+
+Create a practical implementation plan.
+
+Identify:
+
+1. Existing code that needs modification.
+2. New functions or classes required.
+3. Existing functions that can be reused.
+4. Required dependencies.
+5. Database changes if necessary.
+6. Discord permissions or intents required.
+7. Possible compatibility problems.
+8. Testing requirements.
+
+IMPORTANT:
+
+Do not generate the final code yet.
+
+Do not invent existing project functionality.
+
+Do not remove unrelated features.
+
+Return ONLY valid JSON:
+
+{{
+    "success": true,
+    "feature_name": "Feature name",
+    "understanding": "Detailed understanding",
+    "implementation_steps": [
+        "Step 1",
+        "Step 2"
+    ],
+    "files_to_modify": [
+        "main.py"
+    ],
+    "dependencies_to_add": [],
+    "database_changes": [],
+    "discord_permissions": [],
+    "risks": [],
+    "questions": []
+}}
+"""
+
+    response = await ask_ai(
+        prompt,
+        AI_DEVELOPER_INSTRUCTIONS
+    )
+
+    result = extract_ai_json(response)
+
+    if not result:
+
+        return {
+            "success": False,
+            "error": "AI could not create a valid development plan."
+        }
+
+    result["success"] = True
+
+    return result
+
+
+# ============================================================
+# CODE GENERATION ENGINE
+# ============================================================
+
+async def generate_project_changes(
+    developer_message,
+    snapshot,
+    development_plan
+):
+
+    project_context = build_project_context(snapshot)
+
+    if not project_context:
+
+        return {
+            "success": False,
+            "error": "Project context is missing."
+        }
+
+    prompt = f"""
+DEVELOPER REQUEST:
+
+{developer_message}
+
+APPROVED DEVELOPMENT PLAN:
+
+{json.dumps(development_plan, ensure_ascii=False, indent=2)}
+
+CURRENT PROJECT FILES:
+
+{project_context}
+
+YOUR TASK:
+
+Implement the requested feature.
+
+Return the complete contents of every changed file.
+
+FILES ALLOWED:
+
+- main.py
+- requirements.txt
+
+IMPORTANT REQUIREMENTS:
+
+1. Preserve all unrelated working features.
+2. Integrate with the actual existing code.
+3. Do not duplicate existing event handlers.
+4. Do not duplicate Discord command registrations.
+5. Do not create missing imports.
+6. Keep indentation and syntax correct.
+7. Use async/await correctly.
+8. Keep Discord API compatibility.
+9. Add error handling.
+10. Do not hardcode secrets.
+11. Do not remove existing environment variables.
+12. Do not overwrite requirements unnecessarily.
+13. Do not claim the code was executed or tested.
+14. Do not create any additional source files.
+
+Return ONLY valid JSON:
+
+{{
+    "success": true,
+    "summary": "Changes made",
+    "files": {{
+        "main.py": "COMPLETE FILE CONTENT"
+    }},
+    "requirements_changed": false,
+    "warnings": [],
+    "testing_required": []
+}}
+
+If requirements.txt must change, include its complete
+contents inside files and set requirements_changed to true.
+
+If the task cannot be safely completed, return:
+
+{{
+    "success": false,
+    "error": "Reason",
+    "questions": []
+}}
+
+Do not use Markdown code fences.
+"""
+
+    response = await ask_ai(
+        prompt,
+        AI_DEVELOPER_INSTRUCTIONS
+    )
+
+    result = extract_ai_json(response)
+
+    if not result:
+
+        return {
+            "success": False,
+            "error": "AI returned an invalid code-generation response."
+        }
+
+    if not result.get("success"):
+
+        return result
+
+    generated_files = result.get("files")
+
+    if not isinstance(generated_files, dict):
+
+        return {
+            "success": False,
+            "error": "AI did not return a valid files object."
+        }
+
+    if not generated_files:
+
+        return {
+            "success": False,
+            "error": "AI did not generate any project files."
+        }
+
+    for filename, content in generated_files.items():
+
+        if filename not in ALLOWED_PROJECT_FILES:
+
+            return {
+                "success": False,
+                "error": f"Unauthorized project file: {filename}"
+            }
+
+        if not isinstance(content, str):
+
+            return {
+                "success": False,
+                "error": f"Invalid content for {filename}"
+            }
+
+    return result
+
+
+# ============================================================
+# GENERATED CODE VALIDATION
+# ============================================================
+
+def validate_generated_project(
+    generated_files,
+    original_snapshot
+):
+
+    if not isinstance(generated_files, dict):
+
+        return {
+            "success": False,
+            "errors": ["Invalid generated files."]
+        }
+
+    errors = []
+
+    for filename, content in generated_files.items():
+
+        if filename not in ALLOWED_PROJECT_FILES:
+
+            errors.append(
+                f"Unauthorized file: {filename}"
             )
+
             continue
 
-        sections.append(
-            f"\n{'=' * 50}\n"
-            f"FILE: {filename}\n"
-            f"{'=' * 50}\n"
-            f"{info['content']}"
+        if not isinstance(content, str):
+
+            errors.append(
+                f"{filename} content must be text."
+            )
+
+            continue
+
+        if not content.strip():
+
+            errors.append(
+                f"{filename} cannot be empty."
+            )
+
+            continue
+
+        if filename == "main.py":
+
+            valid, message = validate_python_code(
+                content
+            )
+
+            if not valid:
+                errors.append(message)
+
+        if filename == "requirements.txt":
+
+            for line_number, line in enumerate(
+                content.splitlines(),
+                start=1
+            ):
+
+                line = line.strip()
+
+                if not line or line.startswith("#"):
+                    continue
+
+                if line.startswith("-"):
+                    continue
+
+                if not re.match(
+                    r"^[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?(?:\s*.*)?$",
+                    line
+                ):
+
+                    errors.append(
+                        f"Invalid dependency on line {line_number}."
+                    )
+
+    if errors:
+
+        return {
+            "success": False,
+            "errors": errors
+        }
+
+    return {
+        "success": True,
+        "errors": []
+    }
+
+
+# ============================================================
+# CHANGE SUMMARY
+# ============================================================
+
+def create_change_summary(
+    generated_result,
+    original_snapshot
+):
+
+    files = generated_result.get("files", {})
+
+    summary = {
+        "feature_summary": generated_result.get(
+            "summary",
+            "Project changes generated."
+        ),
+        "changed_files": [],
+        "warnings": generated_result.get(
+            "warnings",
+            []
+        ),
+        "testing_required": generated_result.get(
+            "testing_required",
+            []
+        )
+    }
+
+    for filename, new_content in files.items():
+
+        old_content = ""
+
+        original = original_snapshot.get(
+            "files",
+            {}
+        ).get(filename)
+
+        if original:
+            old_content = original.get("content", "")
+
+        summary["changed_files"].append({
+            "filename": filename,
+            "old_characters": len(old_content),
+            "new_characters": len(new_content),
+            "changed": old_content != new_content
+        })
+
+    return summary
+
+
+# ============================================================
+# END OF PART 2
+# ==========================================================
+==
+# ============================================================
+# ELYX TRADING AI DEVELOPER
+# PART 3/5 — NATURAL LANGUAGE + HARD ACCESS
+# ============================================================
+
+import secrets
+
+
+# ============================================================
+# DEVELOPER ACCESS
+# ============================================================
+
+DEVELOPER_ROLE_ID = 1572448688700391454
+
+
+def has_developer_access(member):
+
+    if not isinstance(member, discord.Member):
+        return False
+
+    return any(
+        role.id == DEVELOPER_ROLE_ID
+        for role in member.roles
+    )
+
+
+# ============================================================
+# PENDING APPROVAL STORAGE
+# ============================================================
+
+pending_approvals = {}
+
+APPROVAL_TIMEOUT = 600
+
+
+def create_approval_id():
+
+    return secrets.token_hex(4).upper()
+
+
+def cleanup_pending_approvals():
+
+    current_time = time.time()
+
+    expired = []
+
+    for approval_id, data in pending_approvals.items():
+
+        if current_time - data["created_at"] > APPROVAL_TIMEOUT:
+            expired.append(approval_id)
+
+    for approval_id in expired:
+        pending_approvals.pop(approval_id, None)
+
+
+# ============================================================
+# DISCORD MESSAGE HELPERS
+# ============================================================
+
+async def send_developer_message(message, content):
+
+    if len(content) <= 1900:
+
+        await message.reply(
+            content,
+            mention_author=False
         )
 
-    if result["errors"]:
+        return
 
-        sections.append(
-            "\nINSPECTION ERRORS:\n"
-            + "\n".join(result["errors"])
+    for start in range(0, len(content), 1900):
+
+        await message.channel.send(
+            content[start:start + 1900]
         )
 
-    return "\n".join(sections)
+
+# ============================================================
+# GENERAL AI CHAT
+# ============================================================
+
+async def handle_general_developer_chat(message):
+
+    prompt = f"""
+You are Elyx Trading AI Developer.
+
+The developer sent this normal message:
+
+{message.content}
+
+Reply naturally and helpfully.
+
+Language:
+Use the same language as the developer.
+
+Do not claim that you performed an action unless
+the action was actually completed.
+
+If the developer requests a code change, explain
+that you are preparing a development plan.
+"""
+
+    response = await ask_ai(
+        prompt,
+        AI_DEVELOPER_INSTRUCTIONS
+    )
+
+    if not response:
+
+        await send_developer_message(
+            message,
+            "AI service abhi available nahi hai. "
+            "Gemini aur Groq API connection check karna padega."
+        )
+
+        return
+
+    await send_developer_message(
+        message,
+        response
+    )
+
+
+# ============================================================
+# DEVELOPMENT REQUEST PROCESSOR
+# ============================================================
+
+async def process_development_request(message):
+
+    user_id = message.author.id
+
+    await send_developer_message(
+        message,
+        "ELYX AI Developer: Request samajh rahi hoon aur project inspect kar rahi hoon..."
+    )
+
+    # ----------------------------------------
+    # STEP 1 — UNDERSTAND REQUEST
+    # ----------------------------------------
+
+    understanding = await understand_developer_request(
+        message.content,
+        user_id
+    )
+
+    intent = understanding.get("intent")
+
+    # ----------------------------------------
+    # STEP 2 — NORMAL QUESTION
+    # ----------------------------------------
+
+    if intent in (
+        "general_question",
+        "explain_project"
+    ):
+
+        await handle_general_developer_chat(message)
+
+        return
+
+    # ----------------------------------------
+    # STEP 3 — DISCORD ACTION
+    # ----------------------------------------
+
+    if intent == "discord_server_action":
+
+        await send_developer_message(
+            message,
+            "Samajh gayi. Discord server editing system "
+            "next integration mein connect hoga. "
+            "Abhi koi server change nahi kiya gaya."
+        )
+
+        return
+
+    # ----------------------------------------
+    # STEP 4 — CLARIFICATION
+    # ----------------------------------------
+
+    if intent == "clarification_required":
+
+        clarification = understanding.get(
+            "clarification"
+        ) or "Request clear nahi hai. Thoda aur detail batao."
+
+        await send_developer_message(
+            message,
+            clarification
+        )
+
+        return
+
+    # ----------------------------------------
+    # STEP 5 — INSPECT PROJECT
+    # ----------------------------------------
+
+    snapshot = await get_project_snapshot()
+
+    if not snapshot.get("success"):
+
+        await send_developer_message(
+            message,
+            "GitHub project inspect nahi ho paya. "
+            "Repository settings aur GitHub token check karo."
+        )
+
+        return
+
+    # ----------------------------------------
+    # STEP 6 — CREATE DEVELOPMENT PLAN
+    # ----------------------------------------
+
+    await send_developer_message(
+        message,
+        "Project mil gaya. Ab feature ka development plan bana rahi hoon..."
+    )
+
+    plan = await create_development_plan(
+        message.content,
+        snapshot
+    )
+
+    if not plan.get("success"):
+
+        await send_developer_message(
+            message,
+            "Development plan nahi ban paya:\n"
+            + str(plan.get("error"))
+        )
+
+        return
+
+    if plan.get("questions"):
+
+        await send_developer_message(
+            message,
+            "Ek clarification chahiye:\n"
+            + "\n".join(
+                str(q)
+                for q in plan["questions"]
+            )
+        )
+
+        return
+
+    # ----------------------------------------
+    # STEP 7 — GENERATE CODE
+    # ----------------------------------------
+
+    await send_developer_message(
+        message,
+        "Plan ready. Ab complete code generate kar rahi hoon..."
+    )
+
+    generated = await generate_project_changes(
+        message.content,
+        snapshot,
+        plan
+    )
+
+    if not generated.get("success"):
+
+        await send_developer_message(
+            message,
+            "Code generate nahi hua:\n"
+            + str(generated.get("error"))
+        )
+
+        return
+
+    # ----------------------------------------
+    # STEP 8 — VALIDATE GENERATED FILES
+    # ----------------------------------------
+
+    validation = validate_generated_project(
+        generated.get("files"),
+        snapshot
+    )
+
+    if not validation.get("success"):
+
+        await send_developer_message(
+            message,
+            "Generated code validation fail hui:\n"
+            + "\n".join(validation["errors"])
+        )
+
+        return
+
+    # ----------------------------------------
+    # STEP 9 — CREATE APPROVAL REQUEST
+    # ----------------------------------------
+
+    approval_id = create_approval_id()
+
+    pending_approvals[approval_id] = {
+        "developer_id": user_id,
+        "guild_id": message.guild.id,
+        "files": generated["files"],
+        "snapshot": snapshot,
+        "summary": generated.get("summary", ""),
+        "created_at": time.time()
+    }
+
+    record_development(
+        user_id,
+        message.content,
+        "WAITING_FOR_APPROVAL"
+    )
+
+    summary = create_change_summary(
+        generated,
+        snapshot
+    )
+
+    report = (
+        "ELYX AI DEVELOPER — CODE READY\n\n"
+        f"Feature: {plan.get('feature_name', 'New Feature')}\n\n"
+        f"Summary: {summary['feature_summary']}\n\n"
+        "Files changed:\n"
+    )
+
+    for file_info in summary["changed_files"]:
+
+        report += (
+            f"\n• {file_info['filename']}"
+            f"\n  Old size: {file_info['old_characters']} characters"
+            f"\n  New size: {file_info['new_characters']} characters"
+        )
+
+    report += (
+        "\n\nCode syntax validation: PASSED"
+        "\nExecution testing: NOT YET PERFORMED"
+        f"\n\nApproval ID: `{approval_id}`"
+        "\n\nCode save karne ke liye message bhejo:"
+        f"\n`APPROVE {approval_id}`"
+        "\n\nCancel karne ke liye:"
+        f"\n`CANCEL {approval_id}`"
+        "\n\nApproval 10 minutes mein expire ho jayegi."
+    )
+
+    await send_developer_message(
+        message,
+        report
+    )
+
+
+# ============================================================
+# APPROVAL PROCESSOR
+# ============================================================
+
+async def process_approval_message(message):
+
+    parts = message.content.strip().split()
+
+    if len(parts) != 2:
+        return False
+
+    action = parts[0].upper()
+    approval_id = parts[1].upper()
+
+    if action not in ("APPROVE", "CANCEL"):
+        return False
+
+    data = pending_approvals.get(approval_id)
+
+    if not data:
+        await send_developer_message(
+            message,
+            "Approval ID invalid ya expired hai."
+        )
+        return True
+
+    if data["developer_id"] != message.author.id:
+        await send_developer_message(
+            message,
+            "Ye approval kisi aur developer ki hai."
+        )
+        return True
+
+    if data["guild_id"] != message.guild.id:
+        await send_developer_message(
+            message,
+            "Approval original server mein hi use ho sakti hai."
+        )
+        return True
+
+    if time.time() - data["created_at"] > APPROVAL_TIMEOUT:
+
+        pending_approvals.pop(approval_id, None)
+
+        await send_developer_message(
+            message,
+            "Approval expire ho gayi."
+        )
+
+        return True
+
+    if action == "CANCEL":
+
+        pending_approvals.pop(approval_id, None)
+
+        record_development(
+            message.author.id,
+            "Cancelled approval " + approval_id,
+            "CANCELLED"
+        )
+
+        await send_developer_message(
+            message,
+            "Code changes cancel kar diye gaye. GitHub update nahi hua."
+        )
+
+        return True
+
+    # ----------------------------------------
+    # APPROVE — VERIFY ORIGINAL FILE VERSION
+    # ----------------------------------------
+
+    await send_developer_message(
+        message,
+        "Approval received. GitHub ke current code versions verify kar rahi hoon..."
+    )
+
+    latest_snapshot = await get_project_snapshot()
+
+    if not latest_snapshot.get("success"):
+
+        await send_developer_message(
+            message,
+            "Latest GitHub project read nahi ho paya. Save rok diya."
+        )
+
+        return True
+
+    original_files = data["snapshot"]["files"]
+    latest_files = latest_snapshot["files"]
+
+    for filename in data["files"]:
+
+        old_sha = original_files.get(
+            filename,
+            {}
+        ).get("sha")
+
+        latest_sha = latest_files.get(
+            filename,
+            {}
+        ).get("sha")
+
+        if old_sha != latest_sha:
+
+            await send_developer_message(
+                message,
+                f"{filename} GitHub par approval ke baad change hui hai. "
+                "Conflict detected. Purana code overwrite nahi kiya."
+            )
+
+            pending_approvals.pop(approval_id, None)
+
+            return True
+
+    # ----------------------------------------
+    # SAVE APPROVED FILES
+    # ----------------------------------------
+
+    save_success = True
+
+    for filename, content in data["files"].items():
+
+        existing_sha = latest_files.get(
+            filename,
+            {}
+        ).get("sha")
+
+        saved = await github_save_file(
+            filename,
+            content,
+            f"ELYX AI: Update {filename}",
+            existing_sha
+        )
+
+        if not saved:
+
+            save_success = False
+
+            break
+
+    pending_approvals.pop(approval_id, None)
+
+    if save_success:
+
+        record_development(
+            message.author.id,
+            data["summary"],
+            "SAVED_TO_GITHUB"
+        )
+
+        await send_developer_message(
+            message,
+            "SUCCESS: Approved code GitHub mein save ho gaya.\n"
+            "Naye code ko activate karne ke liye hosting par restart/redeploy "
+            "ki zaroorat ho sakti hai."
+        )
+
+    else:
+
+        record_development(
+            message.author.id,
+            data["summary"],
+            "GITHUB_SAVE_FAILED"
+        )
+
+        await send_developer_message(
+            message,
+            "GitHub update complete nahi hua. Logs check karne honge."
+        )
+
+    return True
+
+
+# ============================================================
+# NATURAL MESSAGE LISTENER
+# ============================================================
+
+@bot.listen("on_message")
+async def elyx_ai_message_listener(message):
+
+    if message.author.bot:
+        return
+
+    if not message.guild:
+        return
+
+    # Ignore messages without developer role.
+    if not has_developer_access(message.author):
+        return
+
+    cleanup_pending_approvals()
+
+    # Handle approval/cancel first.
+    handled = await process_approval_message(message)
+
+    if handled:
+        return
+
+    # Ignore bot commands and unrelated prefix messages.
+    if message.content.startswith(PREFIX):
+        return
+
+    # Store developer context.
+    save_user_memory(
+        message.author.id,
+        message.author.name,
+        message.content[:3000]
+    )
+
+    try:
+
+        async with message.channel.typing():
+
+            understanding = await understand_developer_request(
+                message.content,
+                message.author.id
+            )
+
+            if understanding.get("needs_code_changes") or (
+                understanding.get("intent") in (
+                    "create_feature",
+                    "modify_feature",
+                    "fix_bug"
+                )
+            ):
+
+                await process_development_request(message)
+
+            elif understanding.get("intent") == "discord_server_action":
+
+                await process_development_request(message)
+
+            else:
+
+                await handle_general_developer_chat(message)
+
+    except Exception:
+
+        logger.exception(
+            "ELYX AI MESSAGE HANDLER FAILED"
+        )
+
+        await send_developer_message(
+            message,
+            "Request process karte waqt error aaya. Logs check karne honge."
+        )
 
 
 # ============================================================
@@ -956,644 +1903,801 @@ async def build_project_context():
 
 
 # ============================================================
-# PART 4/5 — AI CODING AGENT
+# ELYX TRADING AI DEVELOPER
+# PART 4/5 — DISCORD SERVER EDITING ENGINE
 # ============================================================
 
 
 # ============================================================
-# CODING AGENT SETTINGS
+# SERVER ACTION CONFIGURATION
 # ============================================================
 
-MAX_CHANGES_PER_REQUEST = 2
+SERVER_ACTION_TIMEOUT = 300
 
-MAX_AI_OUTPUT = 50000
+pending_server_actions = {}
 
-CODING_SYSTEM_PROMPT = """
-You are ELYX TRADING AI SOFTWARE DEVELOPER.
 
-You can inspect and modify these project files:
-- main.py
-- requirements.txt
+# ============================================================
+# DISCORD ACTION AI INSTRUCTIONS
+# ============================================================
 
-You must use the actual project snapshot supplied in each request.
+DISCORD_ACTION_INSTRUCTIONS = """
+You are the Discord Server Management AI of Elyx Trading.
 
-YOUR JOB:
-1. Understand the developer's request.
-2. Inspect the existing code.
-3. Identify the exact changes needed.
-4. Preserve existing working features.
-5. Integrate new features with existing code.
-6. Return complete replacement content for every changed file.
-7. Never invent unseen functions, files or code.
-8. Never claim that code was executed or tested.
-9. Do not include API keys, tokens or secrets.
-10. Do not create destructive or hidden behavior.
+Understand natural language instructions in Hindi,
+Hinglish and English.
+
+The developer can request Discord server changes naturally.
+
+Examples:
+
+- Create a category named Elyx Games.
+- Create battle-room inside Elyx Games.
+- Create a category and multiple channels together.
+- Create a role named Battle Manager.
+- Rename an existing channel.
+- Delete a channel.
+- Rename a role.
+- Delete a role.
 
 IMPORTANT:
-- If the user asks only for analysis or a plan, return no changes.
-- If the request is unclear, ask for clarification.
-- Do not modify files unrelated to the request.
-- Do not execute generated code.
-- Changes must be compatible with the existing project.
 
-RETURN ONLY VALID JSON:
+1. Understand the complete request.
+2. Preserve exact names.
+3. Never shorten names.
+4. Never replace requested names with single letters.
+5. Never invent names.
+6. Never assume a missing category.
+7. Resolve existing Discord objects before modifying them.
+8. If an object is ambiguous, ask for clarification.
+9. Never execute an action without developer confirmation.
+10. Never claim an action succeeded before Discord confirms it.
+
+Return ONLY valid JSON.
+
+Supported actions:
+
+create_category
+create_text_channel
+create_voice_channel
+delete_channel
+rename_channel
+create_role
+delete_role
+rename_role
+
+JSON FORMAT:
 
 {
-  "status": "analysis OR changes OR question",
-  "summary": "Short explanation",
-  "analysis": "What you found",
-  "changes": [
-    {
-      "filename": "main.py",
-      "reason": "Why this file needs modification",
-      "content": "COMPLETE NEW FILE CONTENT"
-    }
-  ],
-  "dependencies": [
-    "discord.py"
-  ],
-  "warnings": [],
-  "questions": []
+    "understood": true,
+    "explanation": "Explanation",
+    "actions": [
+        {
+            "type": "create_category",
+            "name": "Elyx Games"
+        },
+        {
+            "type": "create_text_channel",
+            "name": "battle-room",
+            "category": "Elyx Games"
+        }
+    ],
+    "questions": []
 }
 
-If no changes are needed, use:
-"changes": []
+For a category that already exists, do not create it again.
 
-Never use Markdown code fences around the JSON.
+For missing information, return questions.
+
+Do not return Markdown.
 """
 
 
 # ============================================================
-# CODING REQUEST DETECTION
+# SERVER ACTION VALIDATION
 # ============================================================
 
-CODING_KEYWORDS = [
-
-    "feature",
-    "features",
-    "function",
-    "system",
-    "developer",
-    "coding",
-    "code",
-    "bug",
-    "error",
-    "fix",
-    "update",
-    "upgrade",
-    "improve",
-    "build",
-    "create",
-    "develop",
-    "add",
-    "remove",
-    "delete",
-    "integrate",
-    "inspect",
-    "project",
-    "file",
-    "files",
-    "command",
-    "menu",
-    "system banao",
-    "feature add",
-    "code change",
-    "bug fix",
-    "naya feature",
-    "naya system",
-    "feature banao",
-    "project inspect",
-    "files inspect",
-    "code check",
-    "code improve",
-    "kuch add karo",
-    "kuch banao",
-    "fix karo",
-    "update karo",
-    "integrate karo",
-    "check karo",
-    "inspect karo"
-]
+ALLOWED_SERVER_ACTIONS = {
+    "create_category",
+    "create_text_channel",
+    "create_voice_channel",
+    "delete_channel",
+    "rename_channel",
+    "create_role",
+    "delete_role",
+    "rename_role"
+}
 
 
-def looks_like_coding_request(message):
+def validate_server_action_plan(plan):
 
-    content = message.lower()
+    if not isinstance(plan, dict):
+        return False, "Invalid action plan."
 
-    return any(
-        keyword in content
-        for keyword in CODING_KEYWORDS
+    actions = plan.get("actions")
+
+    if not isinstance(actions, list) or not actions:
+        return False, "No Discord actions were generated."
+
+    if len(actions) > 15:
+        return False, "Maximum 15 actions allowed per request."
+
+    for action in actions:
+
+        if not isinstance(action, dict):
+            return False, "Invalid action format."
+
+        action_type = action.get("type")
+
+        if action_type not in ALLOWED_SERVER_ACTIONS:
+            return False, f"Unsupported action: {action_type}"
+
+        if action_type in (
+            "create_category",
+            "create_text_channel",
+            "create_voice_channel",
+            "create_role",
+            "rename_channel",
+            "rename_role"
+        ):
+
+            name = action.get("name")
+
+            if not isinstance(name, str) or not name.strip():
+                return False, "An action is missing its exact name."
+
+            if len(name) > 100:
+                return False, "Name exceeds Discord's length limit."
+
+        if action_type in (
+            "delete_channel",
+            "rename_channel"
+        ):
+
+            if not action.get("channel"):
+                return False, "Channel name is missing."
+
+        if action_type in (
+            "delete_role",
+            "rename_role"
+        ):
+
+            if not action.get("role"):
+                return False, "Role name is missing."
+
+    return True, "Action plan valid."
+
+
+# ============================================================
+# CREATE DISCORD ACTION PLAN
+# ============================================================
+
+async def create_discord_action_plan(
+    developer_request,
+    guild
+):
+
+    server_info = await get_server_information(guild)
+
+    prompt = f"""
+DEVELOPER REQUEST:
+
+{developer_request}
+
+CURRENT DISCORD SERVER:
+
+{json.dumps(server_info, ensure_ascii=False, indent=2)}
+
+Understand the complete request.
+
+Create a sequence of Discord actions.
+
+For example:
+
+If the developer requests:
+
+"Create Elyx Games category and add
+battle-room and game-chat inside it"
+
+Return three actions:
+
+1. Create category Elyx Games.
+2. Create text channel battle-room inside Elyx Games.
+3. Create text channel game-chat inside Elyx Games.
+
+Preserve exact names.
+
+If the category already exists, reuse it.
+
+If a channel or role name is ambiguous,
+ask the developer.
+
+Return ONLY JSON in the required format.
+"""
+
+    response = await ask_ai(
+        prompt,
+        DISCORD_ACTION_INSTRUCTIONS
     )
 
+    result = extract_ai_json(response)
 
-# ============================================================
-# AI JSON EXTRACTION
-# ============================================================
+    if not result:
+        return {
+            "success": False,
+            "error": "AI returned invalid Discord action data."
+        }
 
-def extract_json_object(text):
+    if result.get("questions"):
 
-    if not isinstance(text, str):
-        raise ValueError("AI response is not text.")
+        return {
+            "success": False,
+            "questions": result["questions"]
+        }
 
-    text = text.strip()
+    valid, error = validate_server_action_plan(result)
 
-    text = re.sub(
-        r"^```(?:json)?\s*",
-        "",
-        text,
-        flags=re.IGNORECASE
-    )
+    if not valid:
+        return {
+            "success": False,
+            "error": error
+        }
 
-    text = re.sub(
-        r"\s*```$",
-        "",
-        text
-    )
-
-    start = text.find("{")
-    end = text.rfind("}")
-
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("AI did not return valid JSON.")
-
-    data = json.loads(text[start:end + 1])
-
-    if not isinstance(data, dict):
-        raise ValueError("AI JSON must be an object.")
-
-    return data
+    return {
+        "success": True,
+        "plan": result
+    }
 
 
 # ============================================================
-# CODE VALIDATION
+# FIND DISCORD OBJECTS
 # ============================================================
 
-def validate_generated_changes(data):
+def find_channel_exact(guild, name):
 
-    if not isinstance(data, dict):
-        raise ValueError("Invalid coding response.")
+    name = name.strip().casefold()
 
-    status = data.get("status")
+    matches = [
+        channel
+        for channel in guild.channels
+        if channel.name.casefold() == name
+    ]
 
-    if status not in ("analysis", "changes", "question"):
-        raise ValueError("Invalid coding status.")
+    if len(matches) == 1:
+        return matches[0]
 
-    changes = data.get("changes", [])
+    return None
 
-    if not isinstance(changes, list):
-        raise ValueError("Changes must be a list.")
 
-    if len(changes) > MAX_CHANGES_PER_REQUEST:
-        raise ValueError("Too many files in one request.")
+def find_role_exact(guild, name):
 
-    validated = []
+    name = name.strip().casefold()
 
-    seen_files = set()
+    matches = [
+        role
+        for role in guild.roles
+        if role.name.casefold() == name
+        and not role.is_default()
+    ]
 
-    for change in changes:
+    if len(matches) == 1:
+        return matches[0]
 
-        if not isinstance(change, dict):
-            raise ValueError("Invalid file change.")
+    return None
 
-        filename = change.get("filename")
 
-        content = change.get("content")
+# ============================================================
+# EXECUTE ONE SERVER ACTION
+# ============================================================
 
-        if filename not in GITHUB_ALLOWED_FILES:
-            raise ValueError(
-                f"File not allowed: {filename}"
+async def execute_server_action(guild, action):
+
+    action_type = action["type"]
+
+    # ----------------------------------------
+    # CREATE CATEGORY
+    # ----------------------------------------
+
+    if action_type == "create_category":
+
+        name = action["name"].strip()
+
+        existing = find_server_category(guild, name)
+
+        if existing:
+            return {
+                "success": True,
+                "message": f"Category already exists: {name}",
+                "object_id": existing.id
+            }
+
+        if not bot_has_permission(guild, "manage_channels"):
+            raise PermissionError("Manage Channels permission required.")
+
+        category = await guild.create_category(
+            name=name,
+            reason="Elyx AI Developer approved action"
+        )
+
+        return {
+            "success": True,
+            "message": f"Category created: {category.name}",
+            "object_id": category.id
+        }
+
+    # ----------------------------------------
+    # CREATE TEXT CHANNEL
+    # ----------------------------------------
+
+    if action_type == "create_text_channel":
+
+        name = action["name"].strip()
+
+        category_name = action.get("category")
+
+        category = None
+
+        if category_name:
+
+            category = find_server_category(
+                guild,
+                category_name
             )
 
-        if filename in seen_files:
-            raise ValueError(
-                f"Duplicate file change: {filename}"
-            )
-
-        seen_files.add(filename)
-
-        if not isinstance(content, str):
-            raise ValueError(
-                f"Invalid content for {filename}."
-            )
-
-        if len(content) > MAX_FILE_SIZE:
-            raise ValueError(
-                f"{filename} exceeds file size limit."
-            )
-
-        if filename.endswith(".py"):
-
-            try:
-                ast.parse(content)
-            except SyntaxError as error:
+            if not category:
                 raise ValueError(
-                    f"{filename} syntax error: {error}"
+                    f"Category not found: {category_name}"
                 )
 
-        if filename == "requirements.txt":
+        existing = find_channel_exact(guild, name)
 
-            for line in content.splitlines():
+        if existing:
 
-                line = line.strip()
+            if existing.category_id == (
+                category.id if category else None
+            ):
 
-                if not line or line.startswith("#"):
-                    continue
+                return {
+                    "success": True,
+                    "message": f"Channel already exists: {name}",
+                    "object_id": existing.id
+                }
 
-                if not re.match(
-                    r"^[A-Za-z0-9_.-]+"
-                    r"([<>=!~]+[A-Za-z0-9_.+-]+)?$",
-                    line
-                ):
-                    raise ValueError(
-                        f"Invalid dependency: {line}"
-                    )
+            raise ValueError(
+                f"Channel {name} already exists in another category."
+            )
 
-        validated.append({
-            "filename": filename,
-            "reason": str(
-                change.get("reason", "")
-            )[:500],
-            "content": content
-        })
+        if not bot_has_permission(guild, "manage_channels"):
+            raise PermissionError("Manage Channels permission required.")
 
-    if status == "changes" and not validated:
-        raise ValueError(
-            "AI marked changes but supplied no files."
+        channel = await guild.create_text_channel(
+            name=name,
+            category=category,
+            reason="Elyx AI Developer approved action"
         )
 
-    if status != "changes" and validated:
-        raise ValueError(
-            "Unexpected file changes in non-change response."
+        return {
+            "success": True,
+            "message": f"Text channel created: {channel.name}",
+            "object_id": channel.id
+        }
+
+    # ----------------------------------------
+    # CREATE VOICE CHANNEL
+    # ----------------------------------------
+
+    if action_type == "create_voice_channel":
+
+        name = action["name"].strip()
+
+        category = None
+
+        if action.get("category"):
+
+            category = find_server_category(
+                guild,
+                action["category"]
+            )
+
+            if not category:
+                raise ValueError("Requested category not found.")
+
+        if find_channel_exact(guild, name):
+            raise ValueError("A channel with this name already exists.")
+
+        if not bot_has_permission(guild, "manage_channels"):
+            raise PermissionError("Manage Channels permission required.")
+
+        channel = await guild.create_voice_channel(
+            name=name,
+            category=category,
+            reason="Elyx AI Developer approved action"
         )
 
-    return validated
+        return {
+            "success": True,
+            "message": f"Voice channel created: {channel.name}",
+            "object_id": channel.id
+        }
+
+    # ----------------------------------------
+    # DELETE CHANNEL
+    # ----------------------------------------
+
+    if action_type == "delete_channel":
+
+        channel = find_channel_exact(
+            guild,
+            action["channel"]
+        )
+
+        if not channel:
+            raise ValueError("Channel not found or ambiguous.")
+
+        if not bot_has_permission(guild, "manage_channels"):
+            raise PermissionError("Manage Channels permission required.")
+
+        channel_name = channel.name
+
+        await channel.delete(
+            reason="Elyx AI Developer approved action"
+        )
+
+        return {
+            "success": True,
+            "message": f"Channel deleted: {channel_name}"
+        }
+
+    # ----------------------------------------
+    # RENAME CHANNEL
+    # ----------------------------------------
+
+    if action_type == "rename_channel":
+
+        channel = find_channel_exact(
+            guild,
+            action["channel"]
+        )
+
+        if not channel:
+            raise ValueError("Channel not found or ambiguous.")
+
+        if not bot_has_permission(guild, "manage_channels"):
+            raise PermissionError("Manage Channels permission required.")
+
+        old_name = channel.name
+
+        await channel.edit(
+            name=action["name"].strip(),
+            reason="Elyx AI Developer approved action"
+        )
+
+        return {
+            "success": True,
+            "message": f"Channel renamed: {old_name} → {channel.name}"
+        }
+
+    # ----------------------------------------
+    # CREATE ROLE
+    # ----------------------------------------
+
+    if action_type == "create_role":
+
+        name = action["name"].strip()
+
+        if find_role_exact(guild, name):
+            raise ValueError("Role already exists.")
+
+        if not bot_has_permission(guild, "manage_roles"):
+            raise PermissionError("Manage Roles permission required.")
+
+        role = await guild.create_role(
+            name=name,
+            reason="Elyx AI Developer approved action"
+        )
+
+        return {
+            "success": True,
+            "message": f"Role created: {role.name}",
+            "object_id": role.id
+        }
+
+    # ----------------------------------------
+    # DELETE ROLE
+    # ----------------------------------------
+
+    if action_type == "delete_role":
+
+        role = find_role_exact(
+            guild,
+            action["role"]
+        )
+
+        if not role:
+            raise ValueError("Role not found or ambiguous.")
+
+        if role >= guild.me.top_role or role.managed:
+            raise PermissionError("Bot cannot manage this role.")
+
+        if not bot_has_permission(guild, "manage_roles"):
+            raise PermissionError("Manage Roles permission required.")
+
+        role_name = role.name
+
+        await role.delete(
+            reason="Elyx AI Developer approved action"
+        )
+
+        return {
+            "success": True,
+            "message": f"Role deleted: {role_name}"
+        }
+
+    # ----------------------------------------
+    # RENAME ROLE
+    # ----------------------------------------
+
+    if action_type == "rename_role":
+
+        role = find_role_exact(
+            guild,
+            action["role"]
+        )
+
+        if not role:
+            raise ValueError("Role not found or ambiguous.")
+
+        if role >= guild.me.top_role or role.managed:
+            raise PermissionError("Bot cannot manage this role.")
+
+        if not bot_has_permission(guild, "manage_roles"):
+            raise PermissionError("Manage Roles permission required.")
+
+        old_name = role.name
+
+        await role.edit(
+            name=action["name"].strip(),
+            reason="Elyx AI Developer approved action"
+        )
+
+        return {
+            "success": True,
+            "message": f"Role renamed: {old_name} → {role.name}"
+        }
+
+    raise ValueError("Unsupported Discord action.")
 
 
 # ============================================================
-# CODING APPROVAL VIEW
+# PREPARE SERVER ACTIONS FOR APPROVAL
 # ============================================================
 
-class CodingApprovalView(discord.ui.View):
+async def prepare_server_actions(message):
 
-    def __init__(
-        self,
-        author_id,
-        guild_id,
-        changes,
-        original_shas
+    result = await create_discord_action_plan(
+        message.content,
+        message.guild
+    )
+
+    if not result.get("success"):
+
+        questions = result.get("questions")
+
+        if questions:
+
+            await send_developer_message(
+                message,
+                "Thodi clarification chahiye:\n"
+                + "\n".join(str(q) for q in questions)
+            )
+
+        else:
+
+            await send_developer_message(
+                message,
+                "Discord action plan nahi bana:\n"
+                + str(result.get("error"))
+            )
+
+        return
+
+    plan = result["plan"]
+
+    action_id = create_approval_id()
+
+    pending_server_actions[action_id] = {
+        "developer_id": message.author.id,
+        "guild_id": message.guild.id,
+        "actions": plan["actions"],
+        "created_at": time.time()
+    }
+
+    report = (
+        "ELYX AI — SERVER ACTION PREVIEW\n\n"
+        + str(plan.get("explanation", "Requested changes"))
+        + "\n\nProposed changes:\n"
+    )
+
+    for index, action in enumerate(
+        plan["actions"],
+        start=1
     ):
 
-        super().__init__(timeout=300)
-
-        self.author_id = author_id
-        self.guild_id = guild_id
-        self.changes = changes
-        self.original_shas = original_shas
-        self.finished = False
-
-    async def interaction_check(self, interaction):
-
-        if interaction.user.id != self.author_id:
-
-            await interaction.response.send_message(
-                "Ye approval sirf request karne wala developer de sakta hai.",
-                ephemeral=True
+        report += (
+            f"\n{index}. "
+            + json.dumps(
+                action,
+                ensure_ascii=False
             )
+        )
 
-            return False
+    report += (
+        "\n\nKoi action abhi execute nahi hua."
+        f"\n\nApprove: `SERVER APPROVE {action_id}`"
+        f"\nCancel: `SERVER CANCEL {action_id}`"
+        "\n\nApproval 5 minutes mein expire hogi."
+    )
 
-        if not get_developer_access(interaction.user):
+    await send_developer_message(
+        message,
+        report
+    )
 
-            await interaction.response.send_message(
-                "Developer permission required.",
-                ephemeral=True
-            )
 
-            return False
+# ============================================================
+# SERVER ACTION APPROVAL
+# ============================================================
+
+async def process_server_approval(message):
+
+    parts = message.content.strip().split()
+
+    if len(parts) != 3:
+        return False
+
+    if parts[0].upper() != "SERVER":
+        return False
+
+    action = parts[1].upper()
+    action_id = parts[2].upper()
+
+    if action not in ("APPROVE", "CANCEL"):
+        return False
+
+    data = pending_server_actions.get(action_id)
+
+    if not data:
+
+        await send_developer_message(
+            message,
+            "Server approval invalid ya expired hai."
+        )
 
         return True
 
-    @discord.ui.button(
-        label="Approve & Save",
-        style=discord.ButtonStyle.success
-    )
-    async def approve(self, interaction, button):
+    if data["developer_id"] != message.author.id:
 
-        if self.finished:
-            await interaction.response.send_message(
-                "This request is already finished.",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.defer(
-            ephemeral=True,
-            thinking=True
+        await send_developer_message(
+            message,
+            "Ye approval tumhari nahi hai."
         )
 
-        self.finished = True
+        return True
 
-        for item in self.children:
-            item.disabled = True
+    if data["guild_id"] != message.guild.id:
+
+        await send_developer_message(
+            message,
+            "Approval original server mein use karo."
+        )
+
+        return True
+
+    if time.time() - data["created_at"] > SERVER_ACTION_TIMEOUT:
+
+        pending_server_actions.pop(action_id, None)
+
+        await send_developer_message(
+            message,
+            "Server approval expire ho gayi."
+        )
+
+        return True
+
+    if action == "CANCEL":
+
+        pending_server_actions.pop(action_id, None)
+
+        await send_developer_message(
+            message,
+            "Server changes cancel kar diye gaye."
+        )
+
+        return True
+
+    pending_server_actions.pop(action_id, None)
+
+    await send_developer_message(
+        message,
+        "Approval received. Discord changes execute ho rahe hain..."
+    )
+
+    results = []
+
+    for item in data["actions"]:
 
         try:
 
-            results = []
-
-            async with PROJECT_LOCK:
-
-                for change in self.changes:
-
-                    filename = change["filename"]
-
-                    result = await github_save_file(
-                        filename=filename,
-                        new_content=change["content"],
-                        approved=True,
-                        commit_message=(
-                            "Elyx AI Developer: "
-                            + filename
-                        ),
-                        expected_sha=self.original_shas.get(
-                            filename
-                        )
-                    )
-
-                    results.append(result)
-
-            message = "\n".join(
-                f"Saved: {result['filename']}"
-                for result in results
+            result = await execute_server_action(
+                message.guild,
+                item
             )
 
-            await interaction.followup.send(
-                "Changes successfully saved to GitHub.\n"
-                + message,
-                ephemeral=True
+            results.append(
+                "SUCCESS: " + result["message"]
             )
 
         except Exception as error:
 
-            logger.exception(
-                "GitHub approval save failed."
+            logger.exception("SERVER ACTION FAILED")
+
+            results.append(
+                "FAILED: " + str(error)
             )
 
-            await interaction.followup.send(
-                "Save failed: "
-                + str(error)[:1200],
-                ephemeral=True
-            )
+            # Stop after a failed dependency.
+            break
 
-        self.stop()
+    report = "ELYX SERVER ACTION RESULTS\n\n"
 
-    @discord.ui.button(
-        label="Cancel",
-        style=discord.ButtonStyle.danger
+    report += "\n".join(results)
+
+    await send_developer_message(
+        message,
+        report
     )
-    async def cancel(self, interaction, button):
 
-        self.finished = True
-
-        for item in self.children:
-            item.disabled = True
-
-        await interaction.response.edit_message(
-            content="Coding changes cancelled. Nothing was saved.",
-            view=self
-        )
-
-        self.stop()
-
-    async def on_timeout(self):
-
-        if self.finished:
-            return
-
-        self.finished = True
-
-        for item in self.children:
-            item.disabled = True
+    return True
 
 
 # ============================================================
-# PROJECT CODING AGENT
+# EXTEND EXISTING APPROVAL PROCESSOR
 # ============================================================
 
-async def run_coding_agent(
-    message,
-    request_text
-):
+_previous_process_approval_message = process_approval_message
 
-    author = message.author
 
-    if not get_developer_access(author):
-        await message.reply(
-            "Developer access required."
-        )
-        return
+async def process_approval_message(message):
 
-    if not GITHUB_REPOSITORY or not GITHUB_TOKEN:
-        await message.reply(
-            "GitHub configuration missing. "
-            "FadeHost environment variables check karo."
-        )
-        return
+    handled = await process_server_approval(message)
 
-    status_message = await message.reply(
-        embed=create_embed(
-            "ELYX AI DEVELOPER",
-            "Project inspect kiya ja raha hai...",
-            0x3498DB
-        )
+    if handled:
+        return True
+
+    return await _previous_process_approval_message(message)
+
+
+# ============================================================
+# CONNECT SERVER ACTION ENGINE TO DEVELOPMENT ENGINE
+# ============================================================
+
+_previous_process_development_request = process_development_request
+
+
+async def process_development_request(message):
+
+    understanding = await understand_developer_request(
+        message.content,
+        message.author.id
     )
 
-    try:
+    if understanding.get("intent") == "discord_server_action":
 
-        project = await inspect_project()
+        await prepare_server_actions(message)
 
-        if project["errors"]:
-            raise RuntimeError(
-                "Project inspection incomplete: "
-                + "; ".join(project["errors"])
-            )
+        return
 
-        existing_files = project["files"]
-
-        if not any(
-            info["exists"]
-            for info in existing_files.values()
-        ):
-            raise RuntimeError(
-                "GitHub project files could not be loaded."
-            )
-
-        project_context = await build_project_context()
-
-        user_prompt = f"""
-DEVELOPER REQUEST:
-
-{request_text}
-
-ACTUAL PROJECT FILES:
-
-{project_context}
-
-PROJECT INSPECTION DETAILS:
-
-{json.dumps({
-    filename: {
-        "exists": info["exists"],
-        "sha": info["sha"],
-        "characters": len(info["content"])
-    }
-    for filename, info in existing_files.items()
-}, ensure_ascii=False)}
-
-IMPORTANT:
-Return complete file content for each changed file.
-Do not invent missing code.
-Do not claim that tests were executed.
-Return valid JSON only.
-"""
-
-        messages = [
-            {
-                "role": "user",
-                "content": (
-                    CODING_SYSTEM_PROMPT
-                    + "\n\n"
-                    + user_prompt
-                )
-            }
-        ]
-
-        ai_response = await generate_ai_reply(messages)
-
-        if len(ai_response) > MAX_AI_OUTPUT:
-            raise ValueError(
-                "AI response exceeded output size limit."
-            )
-
-        data = extract_json_object(ai_response)
-
-        changes = validate_generated_changes(data)
-
-        summary = str(
-            data.get("summary", "")
-        )[:1500]
-
-        analysis = str(
-            data.get("analysis", "")
-        )[:2500]
-
-        questions = data.get("questions", [])
-
-        if not isinstance(questions, list):
-            questions = []
-
-        warnings = data.get("warnings", [])
-
-        if not isinstance(warnings, list):
-            warnings = []
-
-        if data["status"] == "question":
-
-            await status_message.edit(
-                embed=create_embed(
-                    "ELYX • NEEDS CLARIFICATION",
-                    summary + "\n\n" + "\n".join(
-                        str(question)[:500]
-                        for question in questions[:5]
-                    ),
-                    0xF1C40F
-                )
-            )
-
-            return
-
-        if data["status"] == "analysis":
-
-            await status_message.edit(
-                embed=create_embed(
-                    "ELYX • PROJECT ANALYSIS",
-                    (
-                        summary
-                        + "\n\n"
-                        + analysis
-                        + "\n\nNo files changed."
-                    )[:4000],
-                    0x3498DB
-                )
-            )
-
-            return
-
-        original_shas = {
-            filename: info["sha"]
-            for filename, info in existing_files.items()
-        }
-
-        change_description = []
-
-        for change in changes:
-
-            change_description.append(
-                f"**File:** `{change['filename']}`\n"
-                f"**Reason:** {change['reason'] or 'Not specified'}\n"
-                f"**New size:** {len(change['content'])} characters"
-            )
-
-        warning_text = ""
-
-        if warnings:
-
-            warning_text = (
-                "\n\n**Warnings:**\n"
-                + "\n".join(
-                    "- " + str(warning)[:300]
-                    for warning in warnings[:5]
-                )
-            )
-
-        embed = create_embed(
-            "ELYX • CHANGE APPROVAL",
-            (
-                summary
-                + "\n\n"
-                + "\n\n".join(change_description)
-                + warning_text
-                + "\n\n**Syntax validation passed.**"
-                + "\nThis does not mean the code has been runtime-tested."
-                + "\n\nApprove & Save dabane par GitHub mein changes commit honge."
-            )[:4000],
-            0x9B59B6
-        )
-
-        view = CodingApprovalView(
-            author_id=author.id,
-            guild_id=message.guild.id,
-            changes=changes,
-            original_shas=original_shas
-        )
-
-        await status_message.edit(
-            embed=embed,
-            view=view
-        )
-
-    except Exception as error:
-
-        logger.exception(
-            "Coding agent failed."
-        )
-
-        await status_message.edit(
-            embed=create_embed(
-                "ELYX • CODING ERROR",
-                str(error)[:3000],
-                0xE74C3C
-            )
-        )
+    await _previous_process_development_request(message)
 
 
 # ============================================================
@@ -1601,347 +2705,85 @@ Return valid JSON only.
 # ============================================================
 
 
+
 # ============================================================
-# PART 5/5 — DISCORD CONNECTION & STARTUP
+# PART 5/5 — FINAL INTEGRATION & BOT STARTUP
 # ============================================================
+
+import traceback
+from datetime import timedelta
+
+
+# ============================================================
+# FINAL CONFIGURATION
+# ============================================================
+
+RUN_TOKEN = os.getenv("DISCORD_TOKEN")
+
+if not RUN_TOKEN:
+    raise RuntimeError(
+        "DISCORD_TOKEN missing from FadeHost environment variables."
+    )
 
 
 # ============================================================
 # BOT STATUS
 # ============================================================
 
-@bot.event
-async def on_ready():
-
-    logger.info(
-        "ELYX TRADING connected as %s (%s)",
-        bot.user,
-        bot.user.id
-    )
-
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.watching,
-            name="ELYX TRADING • AI Developer"
-        ),
-        status=discord.Status.online
-    )
-
-    logger.info("Elyx AI Developer is ready.")
+bot_ready = False
 
 
 # ============================================================
-# HELP COMMAND
-# ============================================================
-
-@bot.command(name="help")
-async def help_command(ctx):
-
-    embed = create_embed(
-        "ELYX TRADING • AI DEVELOPER",
-        """
-**AI Developer**
-Mention the bot and describe your feature request.
-
-**Available commands**
-
-`!inspect` — Inspect project files.
-`!status` — Check AI and GitHub configuration.
-`!reset` — Reset your conversation.
-`!help` — Show this menu.
-
-**Developer features**
-- Project analysis
-- Feature development
-- Bug analysis
-- Code generation
-- Code validation
-- GitHub approval and saving
-
-All GitHub changes require developer approval.
-""",
-        0x8A2BE2
-    )
-
-    await ctx.reply(embed=embed)
-
-
-# ============================================================
-# PROJECT INSPECTION COMMAND
-# ============================================================
-
-@bot.command(name="inspect")
-async def inspect_command(ctx):
-
-    if not get_developer_access(ctx.author):
-
-        await ctx.reply(
-            "Developer access required."
-        )
-
-        return
-
-    message = await ctx.reply(
-        "Project files inspect ho rahi hain..."
-    )
-
-    try:
-
-        result = await inspect_project()
-
-        lines = []
-
-        for filename, info in result["files"].items():
-
-            if info["exists"]:
-
-                lines.append(
-                    f"**{filename}** — Available "
-                    f"({len(info['content'])} characters)"
-                )
-
-            else:
-
-                lines.append(
-                    f"**{filename}** — Not found"
-                )
-
-        if result["errors"]:
-
-            lines.append(
-                "\n**Inspection errors:**\n"
-                + "\n".join(result["errors"])
-            )
-
-        embed = create_embed(
-            "ELYX • PROJECT INSPECTION",
-            "\n".join(lines)
-            + f"\n\nTotal inspected: {result['total_chars']} characters",
-            0x3498DB
-        )
-
-        await message.edit(embed=embed)
-
-    except Exception as error:
-
-        logger.exception("Project inspection failed.")
-
-        await message.edit(
-            content=f"Inspection failed: {str(error)[:1500]}"
-        )
-
-
-# ============================================================
-# SYSTEM STATUS COMMAND
-# ============================================================
-
-@bot.command(name="status")
-async def status_command(ctx):
-
-    if not get_developer_access(ctx.author):
-
-        await ctx.reply(
-            "Developer access required."
-        )
-
-        return
-
-    gemini_status = (
-        "Configured" if is_configured(GEMINI_API_KEY)
-        else "Missing"
-    )
-
-    groq_status = (
-        "Configured" if is_configured(GROQ_API_KEY)
-        else "Missing"
-    )
-
-    github_status = (
-        "Configured"
-        if (
-            is_configured(GITHUB_TOKEN)
-            and is_configured(GITHUB_REPOSITORY)
-        )
-        else "Missing"
-    )
-
-    embed = create_embed(
-        "ELYX • SYSTEM STATUS",
-        f"""
-**Discord:** Connected
-**Gemini:** {gemini_status}
-**Groq:** {groq_status}
-**GitHub:** {github_status}
-**Repository:** {GITHUB_REPOSITORY or 'Not configured'}
-**Branch:** {GITHUB_BRANCH}
-**AI model:** Gemini {GEMINI_MODEL}
-**Fallback model:** Groq {GROQ_MODEL}
-""",
-        0x2ECC71
-    )
-
-    await ctx.reply(embed=embed)
-
-
-# ============================================================
-# RESET CONVERSATION
-# ============================================================
-
-@bot.command(name="reset")
-async def reset_command(ctx):
-
-    USER_CONVERSATIONS.pop(
-        str(ctx.author.id),
-        None
-    )
-
-    await ctx.reply(
-        "Tumhari current conversation history reset ho gayi."
-    )
-
-
-# ============================================================
-# MESSAGE HANDLER
+# FINAL ERROR HANDLER
 # ============================================================
 
 @bot.event
-async def on_message(message):
+async def on_command_error(ctx, error):
 
-    if message.author.bot:
+    if isinstance(error, commands.CommandNotFound):
         return
 
-    # Prefix commands are processed first.
-    if message.content.startswith(PREFIX):
-
-        await bot.process_commands(message)
-
-        return
-
-    if not bot.user:
-        return
-
-    # Only respond when the bot is mentioned.
-    if bot.user not in message.mentions:
-        return
-
-    if message.guild is None:
-        await message.reply(
-            "Please use Elyx AI Developer inside the server."
-        )
-        return
-
-    # Remove the bot mention from the request.
-    request_text = re.sub(
-        rf"<@!?{bot.user.id}>",
-        "",
-        message.content
-    ).strip()
-
-    if not request_text:
-
-        await message.reply(
-            "Batao, kya banana ya karwana hai?"
-        )
-
-        return
-
-    user_id = str(message.author.id)
-
-    # Developer coding requests.
-    if (
-        get_developer_access(message.author)
-        and looks_like_coding_request(request_text)
-    ):
-
-        await run_coding_agent(
-            message,
-            request_text
-        )
-
-        return
-
-    # Normal AI chat for developers and members.
-    try:
-
-        async with message.channel.typing():
-
-            answer = await get_normal_ai_response(
-                user_id,
-                request_text
-            )
-
-        for part in split_message(answer):
-
-            await message.reply(
-                part,
-                mention_author=False
-            )
-
-    except Exception as error:
-
-        logger.exception(
-            "Normal AI response failed."
-        )
-
-        await message.reply(
-            "AI abhi response nahi de pa raha. "
-            "API configuration ya provider status check karo."
-        )
+    logger.error(
+        "COMMAND ERROR: %s",
+        error
+    )
 
 
 # ============================================================
-# STARTUP
-# ============================================================
-
-async def start_bot():
-
-    missing = check_configuration()
-
-    if missing:
-
-        logger.critical(
-            "Missing configuration: %s",
-            ", ".join(missing)
-        )
-
-        return
-
-    try:
-
-        logger.info(
-            "Starting Elyx Trading AI Developer..."
-        )
-
-        await bot.start(BOT_TOKEN)
-
-    finally:
-
-        if HTTP_SESSION is not None and not HTTP_SESSION.closed:
-
-            await HTTP_SESSION.close()
-
-
-# ============================================================
-# RUN BOT
+# START BOT
 # ============================================================
 
 if __name__ == "__main__":
 
     try:
 
-        asyncio.run(start_bot())
+        logger.info(
+            "STARTING ELYX TRADING AI DEVELOPER..."
+        )
+
+        bot.run(
+            RUN_TOKEN,
+            reconnect=True,
+            log_handler=None
+        )
 
     except KeyboardInterrupt:
 
-        logger.info("Bot stopped.")
-
-    except Exception:
-
-        logger.exception(
-            "Fatal startup error."
+        logger.info(
+            "ELYX BOT STOPPED BY USER"
         )
 
+    except Exception as error:
+
+        logger.critical(
+            "ELYX BOT STARTUP FAILED: %s",
+            error
+        )
+
+        traceback.print_exc()
+        raise
 
 # ============================================================
-# END OF ELYX TRADING AI DEVELOPER
+# END OF PART 5/5
 # ============================================================
+

@@ -2,27 +2,31 @@ import os
 import re
 import asyncio
 import logging
+import inspect
 
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
 from ai_brain import generate_reply, AIUnavailableError
-from tools_hard import has_developer_access
+from tools_normal import get_access_level
+from memory import initialize_memory
 
+
+# ---------------- CONFIGURATION ----------------
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = (
+    os.getenv("DISCORD_TOKEN")
+    or os.getenv("DISCORD_BOT_TOKEN")
+    or os.getenv("BOT_TOKEN")
+    or os.getenv("TOKEN")
+)
 
-DEVELOPER_ROLE_ID = 1572448688700391454
-
+PREFIX = "!"
 MAX_HISTORY = 12
-MAX_REPLY_LENGTH = 1900
-
-CONVERSATIONS = {}
-USER_LOCKS = {}
-
+MAX_MESSAGE_LENGTH = 1900
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,25 +35,50 @@ logging.basicConfig(
 
 logger = logging.getLogger("ELYX_AI")
 
+CONVERSATIONS = {}
+USER_LOCKS = {}
+
+
+# ---------------- DISCORD SETUP ----------------
 
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
 intents.message_content = True
 
-
 bot = commands.Bot(
-    command_prefix=commands.when_mentioned_or("!"),
+    command_prefix=commands.when_mentioned_or(PREFIX),
     intents=intents,
     help_command=None
 )
 
 
-def get_conversation_key(message):
+# ---------------- MEMORY INITIALIZATION ----------------
+
+@bot.event
+async def setup_hook():
+
+    try:
+        result = initialize_memory()
+
+        if inspect.isawaitable(result):
+            await result
+
+        logger.info("Memory database initialized.")
+
+    except Exception:
+        logger.exception("Memory initialization failed.")
+
+
+# ---------------- CONVERSATION SYSTEM ----------------
+
+def get_user_key(message):
+
     return f"{message.guild.id}:{message.author.id}"
 
 
 def get_user_lock(key):
+
     if key not in USER_LOCKS:
         USER_LOCKS[key] = asyncio.Lock()
 
@@ -57,83 +86,89 @@ def get_user_lock(key):
 
 
 def get_ai_messages(key, prompt, access_level):
-    history = CONVERSATIONS.get(key, [])
 
-    messages = list(history)
+    history = list(CONVERSATIONS.get(key, []))
 
     if access_level == "developer":
-        context = (
-            "[ACCESS LEVEL: DEVELOPER / HARD ACCESS]\n"
-            "This member has the authorized Elyx Developer role. "
-            "Help with developer planning and advanced development. "
-            "Never claim an action was executed unless a real tool confirms it."
-        )
-    else:
-        context = (
-            "[ACCESS LEVEL: NORMAL MEMBER]\n"
-            "This member has normal access only. "
-            "Help with ordinary member features and general questions. "
-            "Do not perform or claim to perform moderation, "
-            "nickname changes, role management, channel management, "
-            "server administration, or developer-only operations. "
-            "Explain politely that these require Developer access."
+
+        access_context = (
+            "ACCESS LEVEL: DEVELOPER. "
+            "This member has Elyx Developer access. "
+            "Help with advanced development and server management. "
+            "Never claim an action was completed unless it was actually "
+            "executed and confirmed."
         )
 
-    messages.append({
+    else:
+
+        access_context = (
+            "ACCESS LEVEL: NORMAL MEMBER. "
+            "Provide normal AI assistance and member features. "
+            "Do not claim to perform developer-only operations."
+        )
+
+    history.append({
         "role": "user",
-        "content": context + "\n\nMember request: " + prompt
+        "content": (
+            access_context
+            + "\n\nMember message: "
+            + prompt
+        )
     })
 
-    return messages
+    return history
 
 
-def save_conversation(key, user_message, ai_reply):
+def save_conversation(key, prompt, response):
+
     history = CONVERSATIONS.setdefault(key, [])
 
     history.append({
         "role": "user",
-        "content": user_message
+        "content": prompt
     })
 
     history.append({
         "role": "assistant",
-        "content": ai_reply
+        "content": response
     })
 
     CONVERSATIONS[key] = history[-MAX_HISTORY:]
 
 
-async def send_long_message(message, content):
-    content = content.strip()
+# ---------------- MESSAGE SENDER ----------------
+
+async def send_response(message, content):
+
+    content = str(content).strip()
 
     if not content:
         return
 
-    for start in range(0, len(content), MAX_REPLY_LENGTH):
-        chunk = content[start:start + MAX_REPLY_LENGTH]
+    for start in range(0, len(content), MAX_MESSAGE_LENGTH):
+
+        part = content[start:start + MAX_MESSAGE_LENGTH]
 
         await message.reply(
-            chunk,
+            part,
             mention_author=False,
             allowed_mentions=discord.AllowedMentions.none()
         )
 
 
-async def handle_ai_mention(message):
+# ---------------- AI HANDLER ----------------
 
-    if bot.user is None:
+async def handle_ai(message):
+
+    if message.guild is None:
         return
 
     if not isinstance(message.author, discord.Member):
         return
 
-    # Decide access level using the actual role ID
-    if has_developer_access(message.author):
-        access_level = "developer"
-    else:
-        access_level = "normal"
+    if bot.user is None:
+        return
 
-    # Remove bot mention
     prompt = re.sub(
         rf"<@!?{bot.user.id}>",
         "",
@@ -141,68 +176,88 @@ async def handle_ai_mention(message):
     ).strip()
 
     if not prompt:
+
         await message.reply(
-            "Haan! Batao kya help chahiye?",
+            "Haan, batao kya help chahiye?",
             mention_author=False
         )
+
         return
 
-    key = get_conversation_key(message)
+    try:
+        access_level = get_access_level(message.author)
+
+    except Exception:
+        logger.exception("Access level check failed.")
+
+        await message.reply(
+            "Access check failed. Please try again.",
+            mention_author=False
+        )
+
+        return
+
+    key = get_user_key(message)
     lock = get_user_lock(key)
 
     async with lock:
 
-        thinking_message = await message.reply(
+        thinking = await message.reply(
             "ELYX AI is thinking...",
             mention_author=False
         )
 
         try:
-            ai_messages = get_ai_messages(
+
+            messages = get_ai_messages(
                 key,
                 prompt,
                 access_level
             )
 
-            reply = await generate_reply(ai_messages)
+            response = await generate_reply(messages)
 
-            if not isinstance(reply, str) or not reply.strip():
+            if not isinstance(response, str) or not response.strip():
                 raise RuntimeError("AI returned an empty response.")
 
-            save_conversation(key, prompt, reply)
-
-            await thinking_message.edit(
-                content=reply[:MAX_REPLY_LENGTH]
+            save_conversation(
+                key,
+                prompt,
+                response
             )
 
-            remaining = reply[MAX_REPLY_LENGTH:]
+            await thinking.edit(
+                content=response[:MAX_MESSAGE_LENGTH]
+            )
+
+            remaining = response[MAX_MESSAGE_LENGTH:]
 
             if remaining.strip():
-                await send_long_message(message, remaining)
+                await send_response(message, remaining)
 
         except AIUnavailableError:
-            await thinking_message.edit(
-                content=(
-                    "ELYX AI is temporarily unavailable. "
-                    "Please try again later."
-                )
+
+            await thinking.edit(
+                content="ELYX AI is temporarily unavailable. Please try again."
             )
 
         except Exception:
-            logger.exception("AI request failed")
 
-            await thinking_message.edit(
+            logger.exception("AI response error.")
+
+            await thinking.edit(
                 content="Something went wrong. Please try again."
-
-
             )
 
 
+# ---------------- EVENTS ----------------
+
 @bot.event
 async def on_ready():
+
     logger.info("ELYX TRADING AI DEVELOPER ONLINE")
     logger.info("Bot: %s", bot.user)
-    logger.info("Connected Servers: %s", len(bot.guilds))
+    logger.info("Servers: %s", len(bot.guilds))
 
 
 @bot.event
@@ -211,27 +266,37 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    if bot.user and bot.user in message.mentions:
-        await handle_ai_mention(message)
+    try:
+
+        if bot.user and bot.user in message.mentions:
+            await handle_ai(message)
+
+    except Exception:
+
+        logger.exception("Message handler error.")
 
     await bot.process_commands(message)
 
 
-@bot.event
-async def on_command_error(ctx, error):
-    logger.error("Command Error: %s", error)
+# ---------------- BASIC COMMAND ----------------
+
+@bot.command(name="elyx")
+async def elyx_status(ctx):
+
+    await ctx.reply(
+        "ELYX TRADING AI DEVELOPER is online.",
+        mention_author=False
+    )
 
 
-async def main():
-
-    if not TOKEN:
-        raise RuntimeError(
-            "DISCORD_TOKEN missing! Check FadeHost environment variables."
-        )
-
-    async with bot:
-        await bot.start(TOKEN)
-
+# ---------------- START BOT ----------------
 
 if __name__ == "__main__":
-    asyncio.run(main())
+
+    if not TOKEN:
+
+        raise RuntimeError(
+            "Discord token missing. Set DISCORD_TOKEN in environment variables."
+        )
+
+    bot.run(TOKEN)

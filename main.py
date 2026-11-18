@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import logging
+from datetime import timedelta
 
 import discord
 from discord.ext import commands
@@ -18,7 +19,8 @@ from tools_hard import (
     create_text_channel,
     delete_channel,
     create_role,
-    set_member_role
+    set_member_role,
+    timeout_member,
 )
 
 from self_coder import (
@@ -161,11 +163,11 @@ def get_ai_messages(key, prompt, access_level, user_id):
         access_context = (
             "ACCESS LEVEL: DEVELOPER. "
             "This member has Elyx Developer access. "
-            "Use simple Hinglish when appropriate. "
-            "Never claim an action was completed unless it was "
-            "actually executed and confirmed. "
-            "Never claim access to files or live data without checking. "
-            "Never bypass approval."
+            "Understand Hindi, Hinglish and English naturally. "
+            "For supported Discord actions, use the action system. "
+            "Never provide code instead of performing a supported action. "
+            "Never claim an action was completed unless it actually was. "
+            "Never bypass confirmation or permissions."
         )
 
     else:
@@ -235,6 +237,55 @@ async def send_response(message, content):
         )
 
 
+# ================= NAME PARSER =================
+
+def clean_requested_name(name):
+
+    name = re.sub(
+        r"\s+",
+        " ",
+        str(name)
+    ).strip()
+
+    name = name.strip(" \t\n\r.,!?\"'`")
+
+    return name
+
+
+def extract_named_value(text, keyword):
+
+    pattern = (
+        rf"\b{keyword}\b\s+"
+        rf"(.+?)"
+        rf"(?=\s+\b(?:and inside|inside it|and then|then create|"
+        rf"and create|with colour|with color|colour|color)\b|$)"
+    )
+
+    match = re.search(
+        pattern,
+        text,
+        re.IGNORECASE
+    )
+
+    if not match:
+        return None
+
+    return clean_requested_name(match.group(1))
+
+
+def channel_slug(name):
+
+    name = clean_requested_name(name).lower()
+
+    name = re.sub(r"\s+", "-", name)
+
+    name = re.sub(r"[^a-z0-9_-]", "", name)
+
+    name = re.sub(r"-+", "-", name)
+
+    return name[:100].strip("-_")
+
+
 # ================= ACTION CONFIRMATION =================
 
 class ActionConfirmView(discord.ui.View):
@@ -290,12 +341,12 @@ class ActionConfirmView(discord.ui.View):
                 view=self
             )
 
-        except Exception:
+        except Exception as error:
 
             logger.exception("Approved action failed.")
 
             await interaction.edit_original_response(
-                content="Action failed. Check bot logs.",
+                content=f"Action failed: {error}",
                 view=self
             )
 
@@ -337,8 +388,7 @@ async def request_action(ctx, description, action):
         f"Confirm karne par hi action execute hoga.",
         view=view,
         mention_author=False
-    )
-
+        )
 
 # ================= NATURAL LANGUAGE ACTION SYSTEM =================
 
@@ -349,42 +399,253 @@ async def handle_natural_discord_action(message, prompt):
     guild = message.guild
     actor = message.author
 
-    action_requested = re.search(
-        r"\b(create|make|bana|banao|banado|banade|create\s+kar)\b",
-        text
+    # Developer access check
+    if not is_developer(actor):
+        return False
+
+    # ---------- CATEGORY + CHANNEL CREATION ----------
+
+    category_match = re.search(
+        r"\b(?:category|categor[iy])\s+(?:named|called|naam)\s+(.+)",
+        prompt,
+        re.IGNORECASE
     )
+
+    channel_match = re.search(
+        r"\bchannel\s+(?:named|called|naam)\s+(.+)",
+        prompt,
+        re.IGNORECASE
+    )
+
+    wants_category = bool(
+        re.search(r"\bcategory\b", text)
+    )
+
+    wants_channel = bool(
+        re.search(r"\bchannel\b", text)
+    )
+
+    if (
+        wants_category
+        and re.search(r"\b(create|make|bana|banao|banado|banade)\b", text)
+    ):
+
+        if not category_match:
+            await message.reply(
+                "Category ka poora naam batao.",
+                mention_author=False
+            )
+            return True
+
+        category_name = clean_requested_name(
+            category_match.group(1)
+        )
+
+        if not category_name or len(category_name) > 100:
+            await message.reply(
+                "Invalid category name.",
+                mention_author=False
+            )
+            return True
+
+        nested_channel_name = None
+
+        if re.search(
+            r"\b(?:inside|andar|uske andar)\b",
+            text
+        ):
+
+            if not channel_match:
+                await message.reply(
+                    "Category ke andar channel ka poora naam bhi batao.",
+                    mention_author=False
+                )
+                return True
+
+            nested_channel_name = channel_slug(
+                channel_match.group(1)
+            )
+
+            if not nested_channel_name:
+                await message.reply(
+                    "Invalid channel name.",
+                    mention_author=False
+                )
+                return True
+
+        existing_category = discord.utils.get(
+            guild.categories,
+            name=category_name
+        )
+
+        if existing_category:
+            await message.reply(
+                f"Category `{category_name}` already exists.",
+                mention_author=False
+            )
+            return True
+
+        async def execute_category():
+
+            if not is_developer(actor):
+                raise PermissionError("Developer access required.")
+
+            if not actor.guild_permissions.manage_channels:
+                raise PermissionError(
+                    "You need Manage Channels permission."
+                )
+
+            bot_member = guild.me
+
+            if (
+                bot_member is None
+                or not bot_member.guild_permissions.manage_channels
+            ):
+                raise PermissionError(
+                    "Bot needs Manage Channels permission."
+                )
+
+            category = await guild.create_category(
+                name=category_name,
+                reason=f"Elyx Developer action by {actor}"
+            )
+
+            result = f"Category `{category.name}` created."
+
+            if nested_channel_name:
+
+                channel = await guild.create_text_channel(
+                    name=nested_channel_name,
+                    category=category,
+                    reason=f"Elyx Developer action by {actor}"
+                )
+
+                result += (
+                    f"\nChannel #{channel.name} created inside "
+                    f"`{category.name}`."
+                )
+
+            return result
+
+        description = f"Create category: `{category_name}`"
+
+        if nested_channel_name:
+            description += (
+                f"\nCreate channel: `#{nested_channel_name}`"
+                f"\nInside category: `{category_name}`"
+            )
+
+        view = ActionConfirmView(
+            actor.id,
+            execute_category
+        )
+
+        await message.reply(
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"{description}\n\n"
+            f"Confirm karne par hi dono actions execute honge.",
+            view=view,
+            mention_author=False
+        )
+
+        return True
+
+    # ---------- TEXT CHANNEL CREATION ----------
+
+    if (
+        wants_channel
+        and re.search(r"\b(create|make|bana|banao|banado|banade)\b", text)
+    ):
+
+        if not channel_match:
+            await message.reply(
+                "Channel ka poora naam batao. Example: channel named Elyx Battle",
+                mention_author=False
+            )
+            return True
+
+        channel_name = channel_slug(
+            channel_match.group(1)
+        )
+
+        if not channel_name:
+            await message.reply(
+                "Invalid channel name.",
+                mention_author=False
+            )
+            return True
+
+        existing = discord.utils.get(
+            guild.text_channels,
+            name=channel_name
+        )
+
+        if existing:
+            await message.reply(
+                f"Channel `#{channel_name}` already exists.",
+                mention_author=False
+            )
+            return True
+
+        async def execute_channel():
+
+            if not is_developer(actor):
+                raise PermissionError("Developer access required.")
+
+            return await create_text_channel(
+                guild,
+                actor,
+                channel_name
+            )
+
+        view = ActionConfirmView(
+            actor.id,
+            execute_channel
+        )
+
+        await message.reply(
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"Create channel: `#{channel_name}`\n\n"
+            f"Confirm karne par channel create hoga.",
+            view=view,
+            mention_author=False
+        )
+
+        return True
 
     # ---------- ROLE CREATION ----------
 
-    if action_requested and re.search(r"\brole\b", text):
+    if (
+        re.search(r"\brole\b", text)
+        and re.search(r"\b(create|make|bana|banao|banado|banade)\b", text)
+    ):
 
-        match = re.search(
-            r"(?:create|make|bana|banao|banado|banade)\s+(.+?)\s+role\b",
-            text
+        role_match = re.search(
+            r"\brole\s+(?:named|called|naam)\s+(.+)",
+            prompt,
+            re.IGNORECASE
         )
 
-        if not match:
+        if not role_match:
+
+            role_match = re.search(
+                r"\b(?:create|make|bana|banao|banado|banade)\s+(.+?)\s+role\b",
+                prompt,
+                re.IGNORECASE
+            )
+
+        if not role_match:
             await message.reply(
-                "Role ka naam batao. Example: create Elyx Elite role",
+                "Role ka poora naam batao. Example: create role named Battle Manager",
                 mention_author=False
             )
             return True
 
-        role_name = match.group(1).strip()
-
-        role_name = re.sub(
-            r"\s+",
-            " ",
-            role_name
+        role_name = clean_requested_name(
+            role_match.group(1)
         )
 
-        if not role_name or len(role_name) > 100:
-            await message.reply(
-                "Invalid role name.",
-                mention_author=False
-            )
-            return True
-
+        # Remove colour words only when they are clearly colour instructions.
         colour_map = {
             "purple": 0x800080,
             "red": 0xFF0000,
@@ -403,26 +664,30 @@ async def handle_natural_discord_action(message, prompt):
 
         hex_match = re.search(
             r"#([0-9a-fA-F]{6})",
-            text
+            prompt
         )
 
         if hex_match:
-
             colour = discord.Colour(
                 int(hex_match.group(1), 16)
             )
 
         else:
-
             for colour_name, hex_value in colour_map.items():
 
                 if re.search(
                     rf"\b{colour_name}\b",
                     text
                 ):
-
                     colour = discord.Colour(hex_value)
                     break
+
+        if not role_name or len(role_name) > 100:
+            await message.reply(
+                "Invalid role name.",
+                mention_author=False
+            )
+            return True
 
         existing = discord.utils.get(
             guild.roles,
@@ -439,35 +704,13 @@ async def handle_natural_discord_action(message, prompt):
         async def execute_role():
 
             if not is_developer(actor):
-                raise PermissionError(
-                    "Developer access required."
-                )
+                raise PermissionError("Developer access required.")
 
-            if not actor.guild_permissions.manage_roles:
-                raise PermissionError(
-                    "You need Manage Roles permission."
-                )
-
-            bot_member = guild.me
-
-            if bot_member is None:
-                raise RuntimeError(
-                    "Bot member could not be found."
-                )
-
-            if not bot_member.guild_permissions.manage_roles:
-                raise PermissionError(
-                    "Bot needs Manage Roles permission."
-                )
-
-            role = await guild.create_role(
-                name=role_name,
-                colour=colour,
-                reason="Approved Elyx AI action"
-            )
-
-            return (
-                f"Role `{role.name}` created successfully."
+            return await create_role(
+                guild,
+                actor,
+                role_name,
+                colour=colour
             )
 
         view = ActionConfirmView(
@@ -486,60 +729,296 @@ async def handle_natural_discord_action(message, prompt):
 
         return True
 
-    # ---------- KICK MEMBER ----------
+    # ---------- ROLE ASSIGNMENT ----------
 
-    if re.search(r"\bkick\b", text):
+    if (
+        message.mentions
+        and re.search(
+            r"\b(role|rank)\b",
+            text
+        )
+        and re.search(
+            r"\b(add|give|assign|de|do|lagao|laga|dena)\b",
+            text
+        )
+    ):
 
         targets = [
             member
             for member in message.mentions
-            if bot.user is None or member.id != bot.user.id
+            if isinstance(member, discord.Member)
+            and member.id != actor.id
         ]
 
         if not targets:
+            targets = [
+                member
+                for member in message.mentions
+                if isinstance(member, discord.Member)
+            ]
+
+        if not targets:
             await message.reply(
-                "Member ko mention karo. Example: kick @member",
+                "Jis member ko role dena hai usko mention karo.",
                 mention_author=False
             )
             return True
 
         member = targets[0]
 
-        reason_match = re.search(
-            r"\breason\s+(.+)",
+        role_match = re.search(
+            r"\brole\s+(?:named|called|naam)?\s*(.+)",
             prompt,
             re.IGNORECASE
         )
 
-        reason = (
-            reason_match.group(1).strip()
-            if reason_match
-            else "No reason provided"
+        role = None
+
+        if role_match:
+
+            requested_role_name = clean_requested_name(
+                role_match.group(1)
+            )
+
+            role = discord.utils.find(
+                lambda item: item.name.lower()
+                == requested_role_name.lower(),
+                guild.roles
+            )
+
+        if role is None:
+
+            role_candidates = [
+                item for item in guild.roles
+                if item.name.lower() in text
+            ]
+
+            if role_candidates:
+                role = max(
+                    role_candidates,
+                    key=lambda item: len(item.name)
+                )
+
+        if role is None:
+            await message.reply(
+                "Role ka exact naam nahi mila. Role ka naam message mein likho.",
+                mention_author=False
+            )
+            return True
+
+        async def execute_role_assignment():
+
+            if not is_developer(actor):
+                raise PermissionError("Developer access required.")
+
+            return await set_member_role(
+                guild,
+                actor,
+                member.id,
+                role.id,
+                add=True
+            )
+
+        view = ActionConfirmView(
+            actor.id,
+            execute_role_assignment
         )
+
+        await message.reply(
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"Member: {member.mention}\n"
+            f"Add role: `{role.name}`\n\n"
+            f"Confirm karne par role assign hoga.",
+            view=view,
+            mention_author=False
+        )
+
+        return True
+
+    # ---------- ROLE REMOVAL ----------
+
+    if (
+        message.mentions
+        and re.search(r"\b(role|rank)\b", text)
+        and re.search(r"\b(remove|hata|remove karo|nikalo)\b", text)
+    ):
+
+        targets = [
+            member for member in message.mentions
+            if isinstance(member, discord.Member)
+        ]
+
+        if not targets:
+            return True
+
+        member = targets[0]
+
+        role = discord.utils.find(
+            lambda item: item.name.lower() in text,
+            guild.roles
+        )
+
+        if role is None:
+            await message.reply(
+                "Role ka exact naam message mein likho.",
+                mention_author=False
+            )
+            return True
+
+        async def execute_role_removal():
+
+            if not is_developer(actor):
+                raise PermissionError("Developer access required.")
+
+            return await set_member_role(
+                guild,
+                actor,
+                member.id,
+                role.id,
+                add=False
+            )
+
+        view = ActionConfirmView(
+            actor.id,
+            execute_role_removal
+        )
+
+        await message.reply(
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"Member: {member.mention}\n"
+            f"Remove role: `{role.name}`\n\n"
+            f"Confirm karne par role remove hoga.",
+            view=view,
+            mention_author=False
+        )
+
+        return True
+
+    # ---------- MUTE / TIMEOUT ----------
+
+    mute_requested = bool(
+        re.search(
+            r"\b(mute|timeout|mute\s+kar|chup\s+kar|timeout\s+kar)\b",
+            text
+        )
+    )
+
+    if mute_requested:
+
+        targets = [
+            member
+            for member in message.mentions
+            if isinstance(member, discord.Member)
+            and member.id != actor.id
+            and (bot.user is None or member.id != bot.user.id)
+        ]
+
+        if not targets:
+            await message.reply(
+                "Jis member ko mute karna hai usko mention karo.",
+                mention_author=False
+            )
+            return True
+
+        member = targets[0]
+
+        duration_match = re.search(
+            r"(\d+)\s*(minute|min|minutes|m|hour|hours|h|second|seconds|s)\b",
+            text
+        )
+
+        duration = 5
+        unit = "minutes"
+
+        if duration_match:
+
+            amount = int(duration_match.group(1))
+            unit_text = duration_match.group(2)
+
+            if unit_text in ("hour", "hours", "h"):
+                duration = amount * 60
+                unit = "minutes"
+
+            elif unit_text in ("second", "seconds", "s"):
+                duration = max(1, amount // 60)
+                unit = "minutes"
+
+            else:
+                duration = amount
+                unit = "minutes"
+
+        if duration < 1 or duration > 40320:
+            await message.reply(
+                "Timeout duration 1 minute se 28 days ke beech honi chahiye.",
+                mention_author=False
+            )
+            return True
+
+        async def execute_timeout():
+
+            if not is_developer(actor):
+                raise PermissionError("Developer access required.")
+
+            return await timeout_member(
+                guild,
+                actor,
+                member,
+                duration
+            )
+
+        view = ActionConfirmView(
+            actor.id,
+            execute_timeout
+        )
+
+        await message.reply(
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"Timeout member: {member.mention}\n"
+            f"Duration: `{duration} minutes`\n\n"
+            f"Confirm karne par timeout lagega.",
+            view=view,
+            mention_author=False
+        )
+
+        return True
+
+    # ---------- KICK MEMBER ----------
+
+    if re.search(r"\b(kick|nikaal|remove member)\b", text):
+
+        targets = [
+            member
+            for member in message.mentions
+            if isinstance(member, discord.Member)
+            and (bot.user is None or member.id != bot.user.id)
+        ]
+
+        if not targets:
+            await message.reply(
+                "Member ko mention karo.",
+                mention_author=False
+            )
+            return True
+
+        member = targets[0]
 
         async def execute_kick():
 
             if not is_developer(actor):
-                raise PermissionError(
-                    "Developer access required."
-                )
+                raise PermissionError("Developer access required.")
 
             return await kick_member(
                 guild,
                 actor,
                 member,
-                reason
+                "Approved Elyx Developer action"
             )
 
-        view = ActionConfirmView(
-            actor.id,
-            execute_kick
-        )
+        view = ActionConfirmView(actor.id, execute_kick)
 
         await message.reply(
             f"**ELYX ACTION APPROVAL**\n\n"
-            f"Kick member: {member.mention}\n"
-            f"Reason: {reason}\n\n"
+            f"Kick member: {member.mention}\n\n"
             f"Confirm karne par member kick hoga.",
             view=view,
             mention_author=False
@@ -549,128 +1028,42 @@ async def handle_natural_discord_action(message, prompt):
 
     # ---------- BAN MEMBER ----------
 
-    if re.search(r"\bban\b", text):
+    if re.search(r"\b(ban|permanently remove)\b", text):
 
         targets = [
             member
             for member in message.mentions
-            if bot.user is None or member.id != bot.user.id
+            if isinstance(member, discord.Member)
+            and (bot.user is None or member.id != bot.user.id)
         ]
 
         if not targets:
             await message.reply(
-                "Member ko mention karo. Example: ban @member",
+                "Member ko mention karo.",
                 mention_author=False
             )
             return True
 
         member = targets[0]
 
-        reason_match = re.search(
-            r"\breason\s+(.+)",
-            prompt,
-            re.IGNORECASE
-        )
-
-        reason = (
-            reason_match.group(1).strip()
-            if reason_match
-            else "No reason provided"
-        )
-
         async def execute_ban():
 
             if not is_developer(actor):
-                raise PermissionError(
-                    "Developer access required."
-                )
+                raise PermissionError("Developer access required.")
 
             return await ban_member(
                 guild,
                 actor,
                 member,
-                reason
+                "Approved Elyx Developer action"
             )
 
-        view = ActionConfirmView(
-            actor.id,
-            execute_ban
-        )
+        view = ActionConfirmView(actor.id, execute_ban)
 
         await message.reply(
             f"**ELYX ACTION APPROVAL**\n\n"
-            f"Ban member: {member.mention}\n"
-            f"Reason: {reason}\n\n"
+            f"Ban member: {member.mention}\n\n"
             f"Confirm karne par member ban hoga.",
-            view=view,
-            mention_author=False
-        )
-
-        return True
-
-    # ---------- TEXT CHANNEL CREATION ----------
-
-    if action_requested and "channel" in text:
-
-        hashtag = re.search(
-            r"#([a-z0-9][a-z0-9_-]{0,90})",
-            text
-        )
-
-        if hashtag:
-
-            channel_name = hashtag.group(1)
-
-        else:
-
-            named = re.search(
-                r"(?:named|called|naam)\s+([a-z0-9][a-z0-9_-]{0,90})",
-                text
-            )
-
-            if not named:
-                await message.reply(
-                    "Channel ka naam batao. Example: #elyx-chat",
-                    mention_author=False
-                )
-                return True
-
-            channel_name = named.group(1)
-
-        existing = discord.utils.get(
-            guild.text_channels,
-            name=channel_name
-        )
-
-        if existing:
-            await message.reply(
-                f"#{channel_name} already exists.",
-                mention_author=False
-            )
-            return True
-
-        async def execute_creation():
-
-            if not is_developer(actor):
-                raise PermissionError(
-                    "Developer access required."
-                )
-
-            return await create_text_channel(
-                guild,
-                actor,
-                channel_name
-            )
-
-        view = ActionConfirmView(
-            actor.id,
-            execute_creation
-        )
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"Create channel: `#{channel_name}`\n\n"
-            f"Confirm karne par channel create hoga.",
             view=view,
             mention_author=False
         )
@@ -931,6 +1324,26 @@ async def remove_role_command(
             member.id,
             role.id,
             add=False
+        )
+    )
+
+
+@bot.command(name="timeout")
+@commands.guild_only()
+async def timeout_command(
+    ctx,
+    member: discord.Member,
+    minutes: int = 5
+):
+
+    await request_action(
+        ctx,
+        f"Timeout member: {member}\nDuration: {minutes} minutes",
+        lambda: timeout_member(
+            ctx.guild,
+            ctx.author,
+            member,
+            minutes
         )
     )
 
@@ -1204,7 +1617,9 @@ async def developer_help(ctx):
         return
 
     await ctx.reply(
-        "**ELYX DEVELOPER COMMANDS**\n\n"
+        "**ELYX DEVELOPER**\n\n"
+        "You can talk to Elyx naturally in Hindi, Hinglish or English.\n\n"
+        "**Available commands:**\n"
         "`!kick @member reason`\n"
         "`!ban @member reason`\n"
         "`!nick @member nickname`\n"
@@ -1213,10 +1628,10 @@ async def developer_help(ctx):
         "`!createrole name`\n"
         "`!roleadd @member @role`\n"
         "`!roleremove @member @role`\n"
+        "`!timeout @member 5`\n"
         "`!readcode filename.py`\n"
         "`!codeupdate filename.py` + attached file\n\n"
-        "Natural language channel, role, kick and ban actions are supported.\n"
-        "Important actions require confirmation.",
+        "Supported natural-language actions require confirmation.",
         mention_author=False
     )
 

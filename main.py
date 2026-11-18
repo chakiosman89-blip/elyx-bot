@@ -2,7 +2,6 @@ import os
 import re
 import asyncio
 import logging
-import inspect
 
 import discord
 from discord.ext import commands
@@ -13,7 +12,7 @@ from tools_normal import get_access_level
 from memory import initialize_memory
 
 
-# ---------------- CONFIGURATION ----------------
+# ================= CONFIGURATION =================
 
 load_dotenv()
 
@@ -39,7 +38,7 @@ CONVERSATIONS = {}
 USER_LOCKS = {}
 
 
-# ---------------- DISCORD SETUP ----------------
+# ================= DISCORD SETUP =================
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -53,32 +52,13 @@ bot = commands.Bot(
 )
 
 
-# ---------------- MEMORY INITIALIZATION ----------------
-
-@bot.event
-async def setup_hook():
-
-    try:
-        result = initialize_memory()
-
-        if inspect.isawaitable(result):
-            await result
-
-        logger.info("Memory database initialized.")
-
-    except Exception:
-        logger.exception("Memory initialization failed.")
-
-
-# ---------------- CONVERSATION SYSTEM ----------------
+# ================= CONVERSATION SYSTEM =================
 
 def get_user_key(message):
-
     return f"{message.guild.id}:{message.author.id}"
 
 
 def get_user_lock(key):
-
     if key not in USER_LOCKS:
         USER_LOCKS[key] = asyncio.Lock()
 
@@ -90,7 +70,6 @@ def get_ai_messages(key, prompt, access_level):
     history = list(CONVERSATIONS.get(key, []))
 
     if access_level == "developer":
-
         access_context = (
             "ACCESS LEVEL: DEVELOPER. "
             "This member has Elyx Developer access. "
@@ -100,10 +79,9 @@ def get_ai_messages(key, prompt, access_level):
         )
 
     else:
-
         access_context = (
             "ACCESS LEVEL: NORMAL MEMBER. "
-            "Provide normal AI assistance and member features. "
+            "Provide normal AI assistance. "
             "Do not claim to perform developer-only operations."
         )
 
@@ -123,20 +101,21 @@ def save_conversation(key, prompt, response):
 
     history = CONVERSATIONS.setdefault(key, [])
 
-    history.append({
-        "role": "user",
-        "content": prompt
-    })
-
-    history.append({
-        "role": "assistant",
-        "content": response
-    })
+    history.extend([
+        {
+            "role": "user",
+            "content": prompt
+        },
+        {
+            "role": "assistant",
+            "content": response
+        }
+    ])
 
     CONVERSATIONS[key] = history[-MAX_HISTORY:]
 
 
-# ---------------- MESSAGE SENDER ----------------
+# ================= MESSAGE SENDER =================
 
 async def send_response(message, content):
 
@@ -156,7 +135,7 @@ async def send_response(message, content):
         )
 
 
-# ---------------- AI HANDLER ----------------
+# ================= AI HANDLER =================
 
 async def handle_ai(message):
 
@@ -188,7 +167,8 @@ async def handle_ai(message):
         access_level = get_access_level(message.author)
 
     except Exception:
-        logger.exception("Access level check failed.")
+
+        logger.exception("Access check failed.")
 
         await message.reply(
             "Access check failed. Please try again.",
@@ -243,21 +223,21 @@ async def handle_ai(message):
 
         except Exception:
 
-            logger.exception("AI response error.")
+            logger.exception("AI response failed.")
 
             await thinking.edit(
                 content="Something went wrong. Please try again."
             )
 
 
-# ---------------- EVENTS ----------------
+# ================= EVENTS =================
 
 @bot.event
 async def on_ready():
 
     logger.info("ELYX TRADING AI DEVELOPER ONLINE")
     logger.info("Bot: %s", bot.user)
-    logger.info("Servers: %s", len(bot.guilds))
+    logger.info("Connected servers: %s", len(bot.guilds))
 
 
 @bot.event
@@ -273,12 +253,12 @@ async def on_message(message):
 
     except Exception:
 
-        logger.exception("Message handler error.")
+        logger.exception("Message handler failed.")
 
     await bot.process_commands(message)
 
 
-# ---------------- BASIC COMMAND ----------------
+# ================= BASIC COMMAND =================
 
 @bot.command(name="elyx")
 async def elyx_status(ctx):
@@ -289,14 +269,25 @@ async def elyx_status(ctx):
     )
 
 
-# ---------------- START BOT ----------------
+# ================= START BOT =================
 
-if __name__ == "__main__":
+def main():
 
     if not TOKEN:
-
         raise RuntimeError(
             "Discord token missing. Set DISCORD_TOKEN in environment variables."
         )
 
+    try:
+        initialize_memory()
+        logger.info("Memory database initialized.")
+
+    except Exception:
+        logger.exception("Memory initialization failed.")
+        raise
+
     bot.run(TOKEN)
+
+
+if __name__ == "__main__":
+    main()

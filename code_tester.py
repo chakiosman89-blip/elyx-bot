@@ -1,110 +1,115 @@
 import ast
+import re
 
-
-# =====================================
-# ELYX TRADING - CODE TESTER
-# =====================================
 
 MAX_CODE_SIZE = 100_000
 
-RISKY_MODULES = {
+BLOCKED_IMPORTS = {
     "subprocess",
     "ctypes",
     "pickle",
     "telnetlib",
 }
 
-RISKY_FUNCTIONS = {
+BLOCKED_FUNCTIONS = {
     "eval",
     "exec",
     "compile",
 }
 
+BLOCKED_ATTRIBUTES = {
+    "system",
+    "popen",
+}
 
-def validate_python_code(source: str) -> dict:
+
+def validate_python_code(code):
     """
-    Checks Python syntax and reports
-    potentially risky code patterns.
-    Does not execute submitted code.
+    Static Python code validation.
+    Code is NEVER executed by this function.
     """
 
-    if not isinstance(source, str):
-        return {
-            "valid": False,
-            "error": "Code must be text.",
-            "warnings": []
-        }
+    result = {
+        "valid": False,
+        "success": False,
+        "errors": [],
+        "warnings": [],
+        "message": "",
+    }
 
-    if not source.strip():
-        return {
-            "valid": False,
-            "error": "Code is empty.",
-            "warnings": []
-        }
+    if not isinstance(code, str):
+        result["errors"].append("Code must be a string.")
+        result["message"] = "Invalid code input."
+        return result
 
-    if len(source.encode("utf-8")) > MAX_CODE_SIZE:
-        return {
-            "valid": False,
-            "error": "Code exceeds the size limit.",
-            "warnings": []
-        }
+    if not code.strip():
+        result["errors"].append("Code is empty.")
+        result["message"] = "Empty code."
+        return result
+
+    if len(code.encode("utf-8")) > MAX_CODE_SIZE:
+        result["errors"].append("Code exceeds the 100 KB size limit.")
+        result["message"] = "Code is too large."
+        return result
 
     try:
-        tree = ast.parse(source)
-    except SyntaxError as error:
-        return {
-            "valid": False,
-            "error": (
-                f"Syntax error at line {error.lineno}: "
-                f"{error.msg}"
-            ),
-            "warnings": []
-        }
+        tree = ast.parse(code)
 
-    warnings = []
+    except SyntaxError as error:
+        result["errors"].append(
+            f"Syntax error at line {error.lineno}: {error.msg}"
+        )
+        result["message"] = "Python syntax validation failed."
+        return result
 
     for node in ast.walk(tree):
 
         if isinstance(node, ast.Import):
+
             for alias in node.names:
-                if alias.name.split(".")[0] in RISKY_MODULES:
-                    warnings.append(
-                        f"Review risky import: {alias.name}"
+                module = alias.name.split(".")[0]
+
+                if module in BLOCKED_IMPORTS:
+                    result["warnings"].append(
+                        f"Restricted import detected: {module}"
                     )
 
         elif isinstance(node, ast.ImportFrom):
+
             if node.module:
-                if node.module.split(".")[0] in RISKY_MODULES:
-                    warnings.append(
-                        f"Review risky import: {node.module}"
+                module = node.module.split(".")[0]
+
+                if module in BLOCKED_IMPORTS:
+                    result["warnings"].append(
+                        f"Restricted import detected: {module}"
                     )
 
         elif isinstance(node, ast.Call):
+
             if isinstance(node.func, ast.Name):
-                if node.func.id in RISKY_FUNCTIONS:
-                    warnings.append(
-                        f"Review dynamic function: {node.func.id}"
+
+                if node.func.id in BLOCKED_FUNCTIONS:
+                    result["warnings"].append(
+                        f"Restricted function detected: {node.func.id}"
                     )
 
             elif isinstance(node.func, ast.Attribute):
-                if node.func.attr == "system":
-                    warnings.append(
-                        "Review possible system command."
+
+                if node.func.attr in BLOCKED_ATTRIBUTES:
+                    result["warnings"].append(
+                        f"Restricted operation detected: {node.func.attr}"
                     )
 
-    return {
-        "valid": True,
-        "error": None,
-        "warnings": sorted(set(warnings)),
-        "message": (
-            "Syntax check passed. "
-            "Further testing is still required."
-        )
-    }
+    result["valid"] = True
+    result["success"] = True
+    result["message"] = "Python syntax validation passed."
+
+    return result
 
 
-def get_python_syntax_status(source: str) -> bool:
-    """Returns True if Python syntax is valid."""
+def validate_text_size(text, max_size=MAX_CODE_SIZE):
 
-    result = validate_python_code(source)
-    return result["valid"]
+    if not isinstance(text, str):
+        return False
+
+    return len(text.encode("utf-8")) <= max_size

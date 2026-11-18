@@ -30,6 +30,7 @@ def get_connection():
 
 def initialize_database():
     with get_connection() as conn:
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +46,7 @@ def initialize_database():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 description TEXT,
+                file_path TEXT DEFAULT '',
                 status TEXT DEFAULT 'planned',
                 created_at TEXT NOT NULL
             )
@@ -58,13 +60,32 @@ def initialize_database():
             )
         """)
 
+        columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(features)"
+            ).fetchall()
+        }
+
+        if "file_path" not in columns:
+            conn.execute("""
+                ALTER TABLE features
+                ADD COLUMN file_path TEXT DEFAULT ''
+            """)
+
 
 def save_memory(user_id, content, category="general"):
     with get_connection() as conn:
         cursor = conn.execute("""
-            INSERT INTO memories (user_id, content, category, created_at)
+            INSERT INTO memories
+            (user_id, content, category, created_at)
             VALUES (?, ?, ?, ?)
-        """, (str(user_id), str(content), str(category), current_time()))
+        """, (
+            str(user_id),
+            str(content),
+            str(category),
+            current_time()
+        ))
 
         return cursor.lastrowid
 
@@ -77,38 +98,62 @@ def get_memories(user_id, limit=20):
             WHERE user_id = ?
             ORDER BY id DESC
             LIMIT ?
-        """, (str(user_id), max(1, int(limit)))).fetchall()
+        """, (
+            str(user_id),
+            max(1, int(limit))
+        )).fetchall()
 
         return [dict(row) for row in rows]
 
 
-def save_feature(name, description="", status="planned"):
+def save_feature(
+    name,
+    description="",
+    file_path="",
+    status="planned"
+):
     with get_connection() as conn:
         cursor = conn.execute("""
-            INSERT INTO features (name, description, status, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (str(name), str(description), str(status), current_time()))
+            INSERT INTO features
+            (name, description, file_path, status, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            str(name),
+            str(description),
+            str(file_path),
+            str(status),
+            current_time()
+        ))
 
         return cursor.lastrowid
 
 
 def get_features(status=None, limit=50):
     with get_connection() as conn:
+
         if status:
             rows = conn.execute("""
-                SELECT id, name, description, status, created_at
+                SELECT id, name, description, file_path,
+                       status, created_at
                 FROM features
                 WHERE status = ?
                 ORDER BY id DESC
                 LIMIT ?
-            """, (str(status), max(1, int(limit)))).fetchall()
+            """, (
+                str(status),
+                max(1, int(limit))
+            )).fetchall()
+
         else:
             rows = conn.execute("""
-                SELECT id, name, description, status, created_at
+                SELECT id, name, description, file_path,
+                       status, created_at
                 FROM features
                 ORDER BY id DESC
                 LIMIT ?
-            """, (max(1, int(limit)),)).fetchall()
+            """, (
+                max(1, int(limit)),
+            )).fetchall()
 
         return [dict(row) for row in rows]
 
@@ -121,7 +166,11 @@ def set_setting(key, value):
             ON CONFLICT(key) DO UPDATE SET
                 value = excluded.value,
                 updated_at = excluded.updated_at
-        """, (str(key), str(value), current_time()))
+        """, (
+            str(key),
+            str(value),
+            current_time()
+        ))
 
         return True
 

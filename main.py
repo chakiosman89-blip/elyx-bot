@@ -115,7 +115,6 @@ def get_memory_context(user_id, access_level):
     except Exception:
         logger.exception("User memory retrieval failed.")
 
-    # Project memories are developer-only.
     if access_level == "developer":
 
         try:
@@ -162,9 +161,11 @@ def get_ai_messages(key, prompt, access_level, user_id):
         access_context = (
             "ACCESS LEVEL: DEVELOPER. "
             "This member has Elyx Developer access. "
-            "Help with advanced development and server management. "
-            "Never claim an action was completed unless it was actually "
-            "executed and confirmed. Never bypass approval."
+            "Use simple Hinglish when appropriate. "
+            "Never claim an action was completed unless it was "
+            "actually executed and confirmed. "
+            "Never claim access to files or live data without checking. "
+            "Never bypass approval."
         )
 
     else:
@@ -232,94 +233,6 @@ async def send_response(message, content):
             mention_author=False,
             allowed_mentions=discord.AllowedMentions.none()
         )
-
-
-# ================= AI HANDLER =================
-
-async def handle_ai(message):
-
-    if message.guild is None:
-        return
-
-    if not isinstance(message.author, discord.Member):
-        return
-
-    if bot.user is None:
-        return
-
-    prompt = re.sub(
-        rf"<@!?{bot.user.id}>",
-        "",
-        message.content
-    ).strip()
-
-    if not prompt:
-
-        await message.reply(
-            "Haan, batao kya help chahiye?",
-            mention_author=False
-        )
-
-        return
-
-    access_level = (
-        "developer"
-        if is_developer(message.author)
-        else "normal"
-    )
-
-    key = get_user_key(message)
-    lock = get_user_lock(key)
-
-    async with lock:
-
-        thinking = await message.reply(
-            "ELYX AI is thinking...",
-            mention_author=False
-        )
-
-        try:
-
-            messages = get_ai_messages(
-                key,
-                prompt,
-                access_level,
-                message.author.id
-            )
-
-            response = await generate_reply(messages)
-
-            if not isinstance(response, str) or not response.strip():
-                raise RuntimeError("AI returned an empty response.")
-
-            save_conversation(
-                key,
-                prompt,
-                response
-            )
-
-            await thinking.edit(
-                content=response[:MAX_MESSAGE_LENGTH]
-            )
-
-            remaining = response[MAX_MESSAGE_LENGTH:]
-
-            if remaining.strip():
-                await send_response(message, remaining)
-
-        except AIUnavailableError:
-
-            await thinking.edit(
-                content="ELYX AI is temporarily unavailable. Please try again."
-            )
-
-        except Exception:
-
-            logger.exception("AI response failed.")
-
-            await thinking.edit(
-                content="Something went wrong. Please try again."
-            )
 
 
 # ================= ACTION CONFIRMATION =================
@@ -419,7 +332,180 @@ async def request_action(ctx, description, action):
         f"Confirm karne par hi action execute hoga.",
         view=view,
         mention_author=False
+)
+
+# ================= NATURAL LANGUAGE ACTION SYSTEM =================
+
+async def handle_natural_discord_action(message, prompt):
+
+    text = prompt.lower()
+
+    action_requested = re.search(
+        r"\b(create|make|bana|banao|banado|banade|create\s+kar)\b",
+        text
     )
+
+    if not action_requested or "channel" not in text:
+        return False
+
+    hashtag = re.search(
+        r"#([a-z0-9][a-z0-9_-]{0,90})",
+        text
+    )
+
+    if hashtag:
+        channel_name = hashtag.group(1)
+
+    else:
+        named = re.search(
+            r"(?:named|called|naam)\s+([a-z0-9][a-z0-9_-]{0,90})",
+            text
+        )
+
+        if not named:
+            await message.reply(
+                "Channel ka naam bhi batao. Example: #elyx-chat",
+                mention_author=False
+            )
+            return True
+
+        channel_name = named.group(1)
+
+    existing = discord.utils.get(
+        message.guild.text_channels,
+        name=channel_name
+    )
+
+    if existing:
+        await message.reply(
+            f"#{channel_name} already exists.",
+            mention_author=False
+        )
+        return True
+
+    async def execute_creation():
+
+        if not is_developer(message.author):
+            raise PermissionError("Developer access required.")
+
+        result = await create_text_channel(
+            message.guild,
+            message.author,
+            channel_name
+        )
+
+        return result or f"#{channel_name} created successfully."
+
+    view = ActionConfirmView(
+        requester_id=message.author.id,
+        action=execute_creation
+    )
+
+    await message.reply(
+        f"**ELYX ACTION APPROVAL**\n\n"
+        f"Create channel: `#{channel_name}`\n\n"
+        f"Confirm karne par channel create hoga.",
+        view=view,
+        mention_author=False
+    )
+
+    return True
+
+
+# ================= AI HANDLER =================
+
+async def handle_ai(message):
+
+    if message.guild is None:
+        return
+
+    if not isinstance(message.author, discord.Member):
+        return
+
+    if bot.user is None:
+        return
+
+    prompt = re.sub(
+        rf"<@!?{bot.user.id}>",
+        "",
+        message.content
+    ).strip()
+
+    if not prompt:
+        await message.reply(
+            "Haan, batao kya help chahiye?",
+            mention_author=False
+        )
+        return
+
+    access_level = (
+        "developer"
+        if is_developer(message.author)
+        else "normal"
+    )
+
+    if access_level == "developer":
+
+        handled = await handle_natural_discord_action(
+            message,
+            prompt
+        )
+
+        if handled:
+            return
+
+    key = get_user_key(message)
+    lock = get_user_lock(key)
+
+    async with lock:
+
+        thinking = await message.reply(
+            "ELYX AI is thinking...",
+            mention_author=False
+        )
+
+        try:
+
+            messages = get_ai_messages(
+                key,
+                prompt,
+                access_level,
+                message.author.id
+            )
+
+            response = await generate_reply(messages)
+
+            if not isinstance(response, str) or not response.strip():
+                raise RuntimeError("AI returned an empty response.")
+
+            save_conversation(
+                key,
+                prompt,
+                response
+            )
+
+            await thinking.edit(
+                content=response[:MAX_MESSAGE_LENGTH]
+            )
+
+            remaining = response[MAX_MESSAGE_LENGTH:]
+
+            if remaining.strip():
+                await send_response(message, remaining)
+
+        except AIUnavailableError:
+
+            await thinking.edit(
+                content="ELYX AI is temporarily unavailable. Please try again."
+            )
+
+        except Exception:
+
+            logger.exception("AI response failed.")
+
+            await thinking.edit(
+                content="Something went wrong. Please try again."
+            )
 
 
 # ================= SERVER MANAGEMENT =================
@@ -574,14 +660,25 @@ async def read_code_command(ctx, *, filename):
             return
 
         content = str(content)
+        lines = content.splitlines()
 
-        for start in range(0, len(content), 1700):
+        summary = (
+            f"**File:** `{filename}`\n"
+            f"**Lines:** {len(lines)}\n"
+            f"**Characters:** {len(content)}\n\n"
+            f"```python\n"
+            f"{content[:1500]}\n"
+            f"```"
+        )
 
-            part = content[start:start + 1700]
+        await ctx.reply(
+            summary,
+            mention_author=False
+        )
 
-            await ctx.reply(
-                f"```python\n{part}\n```",
-                mention_author=False
+        if len(content) > 1500:
+            await ctx.send(
+                "File has more content. Use the file-reading workflow to inspect the remaining code."
             )
 
     except Exception:
@@ -604,32 +701,26 @@ async def code_update_command(ctx, filename=None):
         return
 
     if not filename:
-
         await ctx.reply(
             "Usage: !codeupdate filename.py\nAttach the new code file.",
             mention_author=False
         )
-
         return
 
     if not ctx.message.attachments:
-
         await ctx.reply(
             "Please attach the new code file.",
             mention_author=False
         )
-
         return
 
     attachment = ctx.message.attachments[0]
 
     if attachment.size > MAX_CODE_SIZE:
-
         await ctx.reply(
             "File is too large. Maximum size is 100 KB.",
             mention_author=False
         )
-
         return
 
     try:
@@ -637,7 +728,6 @@ async def code_update_command(ctx, filename=None):
         validate_file_path(filename)
 
         raw_content = await attachment.read()
-
         new_content = raw_content.decode("utf-8")
 
         review = review_code_change(
@@ -662,13 +752,11 @@ async def code_update_command(ctx, filename=None):
         )
 
         if errors or not review_passed:
-
             await ctx.reply(
                 "**Code review failed.**\n"
                 + "\n".join(str(item) for item in errors[:5]),
                 mention_author=False
             )
-
             return
 
         warnings = review.get("warnings") or []
@@ -684,17 +772,14 @@ async def code_update_command(ctx, filename=None):
         existing_file = await builder.get_file(filename)
 
         if not existing_file:
-
             await ctx.reply(
                 "GitHub file not found. This workflow updates existing files only.",
                 mention_author=False
             )
-
             return
 
         async def approved_update():
 
-            # Check developer access again before committing.
             if not is_developer(ctx.author):
                 raise PermissionError(
                     "Developer access is no longer available."
@@ -799,6 +884,7 @@ async def developer_help(ctx):
         "`!roleremove @member @role`\n"
         "`!readcode filename.py`\n"
         "`!codeupdate filename.py` + attached file\n\n"
+        "Natural language channel creation is also supported.\n"
         "Important actions require confirmation.",
         mention_author=False
     )
@@ -809,7 +895,6 @@ async def developer_help(ctx):
 def main():
 
     if not TOKEN:
-
         raise RuntimeError(
             "Discord token missing. Set DISCORD_TOKEN in environment variables."
         )

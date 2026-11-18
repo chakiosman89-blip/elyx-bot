@@ -3688,8 +3688,7 @@ if action_type == "rename_role":
             "message": f"Role renamed: {old_name} → {role.name}"
         }
 
-            raise ValueError("Unsupported Discord action.")
-
+                raise ValueError("Unsupported Discord action.")
 
 class ServerActionApprovalView(discord.ui.View):
     def __init__(self, action_id):

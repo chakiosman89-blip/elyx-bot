@@ -1,23 +1,41 @@
-
 import discord
 
-from tools_hard import has_developer_access
+
+# Elyx Developer role
+DEVELOPER_ROLE_ID = 1572448688700391454
 
 
-def is_valid_member(member: discord.Member) -> bool:
-    """Checks whether the user is a valid human server member."""
+def is_valid_member(member):
+    """Check whether the user is a valid human server member."""
 
-    if not isinstance(member, discord.Member):
-        return False
+    return (
+        isinstance(member, discord.Member)
+        and not member.bot
+        and member.guild is not None
+    )
 
-    return not member.bot
 
-
-def get_access_level(member: discord.Member) -> str:
-    """Identifies the member's Elyx access level."""
+def has_developer_access(member):
+    """Check Elyx Developer role access."""
 
     if not is_valid_member(member):
-        return "none"
+        return False
+
+    # Server owner always has developer-level access
+    if member.id == member.guild.owner_id:
+        return True
+
+    return any(
+        role.id == DEVELOPER_ROLE_ID
+        for role in member.roles
+    )
+
+
+def get_access_level(member):
+    """Return the member's access level."""
+
+    if not is_valid_member(member):
+        return "invalid"
 
     if has_developer_access(member):
         return "developer"
@@ -25,22 +43,24 @@ def get_access_level(member: discord.Member) -> str:
     return "normal"
 
 
-def can_use_normal_features(member: discord.Member) -> bool:
-    """Allows ordinary features to valid human members."""
+def can_use_normal_features(member):
+    """Check access to normal member features."""
 
     return is_valid_member(member)
 
 
-def get_normal_member_info(member: discord.Member) -> dict:
-    """Returns basic member information."""
+def get_normal_member_info(member):
+    """Return basic member information."""
 
     if not is_valid_member(member):
-        return {}
+        return None
 
     return {
         "user_id": member.id,
-        "username": member.name,
+        "username": str(member),
         "display_name": member.display_name,
+        "guild_id": member.guild.id,
         "access_level": get_access_level(member),
-        "normal_features": True
-      }
+        "is_developer": has_developer_access(member),
+        "is_bot": member.bot,
+    }

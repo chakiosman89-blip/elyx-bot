@@ -240,6 +240,7 @@ async def send_response(message, content):
 class ActionConfirmView(discord.ui.View):
 
     def __init__(self, requester_id, action):
+
         super().__init__(timeout=60)
 
         self.requester_id = requester_id
@@ -278,7 +279,11 @@ class ActionConfirmView(discord.ui.View):
 
             result = await self.action()
 
-            result_text = str(result) if result else "Action completed."
+            result_text = (
+                str(result)
+                if result
+                else "Action completed."
+            )
 
             await interaction.edit_original_response(
                 content=f"ELYX: {result_text}",
@@ -332,85 +337,347 @@ async def request_action(ctx, description, action):
         f"Confirm karne par hi action execute hoga.",
         view=view,
         mention_author=False
-)
+    )
+
 
 # ================= NATURAL LANGUAGE ACTION SYSTEM =================
 
 async def handle_natural_discord_action(message, prompt):
 
-    text = prompt.lower()
+    text = prompt.lower().strip()
+
+    guild = message.guild
+    actor = message.author
 
     action_requested = re.search(
         r"\b(create|make|bana|banao|banado|banade|create\s+kar)\b",
         text
     )
 
-    if not action_requested or "channel" not in text:
-        return False
+    # ---------- ROLE CREATION ----------
 
-    hashtag = re.search(
-        r"#([a-z0-9][a-z0-9_-]{0,90})",
-        text
-    )
+    if action_requested and re.search(r"\brole\b", text):
 
-    if hashtag:
-        channel_name = hashtag.group(1)
-
-    else:
-        named = re.search(
-            r"(?:named|called|naam)\s+([a-z0-9][a-z0-9_-]{0,90})",
+        match = re.search(
+            r"(?:create|make|bana|banao|banado|banade)\s+(.+?)\s+role\b",
             text
         )
 
-        if not named:
+        if not match:
             await message.reply(
-                "Channel ka naam bhi batao. Example: #elyx-chat",
+                "Role ka naam batao. Example: create Elyx Elite role",
                 mention_author=False
             )
             return True
 
-        channel_name = named.group(1)
+        role_name = match.group(1).strip()
 
-    existing = discord.utils.get(
-        message.guild.text_channels,
-        name=channel_name
-    )
+        role_name = re.sub(
+            r"\s+",
+            " ",
+            role_name
+        )
 
-    if existing:
+        if not role_name or len(role_name) > 100:
+            await message.reply(
+                "Invalid role name.",
+                mention_author=False
+            )
+            return True
+
+        colour_map = {
+            "purple": 0x800080,
+            "red": 0xFF0000,
+            "blue": 0x0000FF,
+            "green": 0x00FF00,
+            "yellow": 0xFFFF00,
+            "orange": 0xFFA500,
+            "pink": 0xFFC0CB,
+            "cyan": 0x00FFFF,
+            "gold": 0xFFD700,
+            "black": 0x000000,
+            "white": 0xFFFFFF
+        }
+
+        colour = discord.Colour.default()
+
+        hex_match = re.search(
+            r"#([0-9a-fA-F]{6})",
+            text
+        )
+
+        if hex_match:
+
+            colour = discord.Colour(
+                int(hex_match.group(1), 16)
+            )
+
+        else:
+
+            for colour_name, hex_value in colour_map.items():
+
+                if re.search(
+                    rf"\b{colour_name}\b",
+                    text
+                ):
+
+                    colour = discord.Colour(hex_value)
+                    break
+
+        existing = discord.utils.get(
+            guild.roles,
+            name=role_name
+        )
+
+        if existing:
+            await message.reply(
+                f"Role `{role_name}` already exists.",
+                mention_author=False
+            )
+            return True
+
+        async def execute_role():
+
+            if not is_developer(actor):
+                raise PermissionError(
+                    "Developer access required."
+                )
+
+            if not actor.guild_permissions.manage_roles:
+                raise PermissionError(
+                    "You need Manage Roles permission."
+                )
+
+            bot_member = guild.me
+
+            if bot_member is None:
+                raise RuntimeError(
+                    "Bot member could not be found."
+                )
+
+            if not bot_member.guild_permissions.manage_roles:
+                raise PermissionError(
+                    "Bot needs Manage Roles permission."
+                )
+
+            role = await guild.create_role(
+                name=role_name,
+                colour=colour,
+                reason="Approved Elyx AI action"
+            )
+
+            return (
+                f"Role `{role.name}` created successfully."
+            )
+
+        view = ActionConfirmView(
+            actor.id,
+            execute_role
+        )
+
         await message.reply(
-            f"#{channel_name} already exists.",
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"Create role: `{role_name}`\n"
+            f"Colour: `{colour}`\n\n"
+            f"Confirm karne par role create hoga.",
+            view=view,
             mention_author=False
         )
+
         return True
 
-    async def execute_creation():
+    # ---------- KICK MEMBER ----------
 
-        if not is_developer(message.author):
-            raise PermissionError("Developer access required.")
+    if re.search(r"\bkick\b", text):
 
-        result = await create_text_channel(
-            message.guild,
-            message.author,
-            channel_name
+        targets = [
+            member
+            for member in message.mentions
+            if bot.user is None or member.id != bot.user.id
+        ]
+
+        if not targets:
+            await message.reply(
+                "Member ko mention karo. Example: kick @member",
+                mention_author=False
+            )
+            return True
+
+        member = targets[0]
+
+        reason_match = re.search(
+            r"\breason\s+(.+)",
+            prompt,
+            re.IGNORECASE
         )
 
-        return result or f"#{channel_name} created successfully."
+        reason = (
+            reason_match.group(1).strip()
+            if reason_match
+            else "No reason provided"
+        )
 
-    view = ActionConfirmView(
-        requester_id=message.author.id,
-        action=execute_creation
-    )
+        async def execute_kick():
 
-    await message.reply(
-        f"**ELYX ACTION APPROVAL**\n\n"
-        f"Create channel: `#{channel_name}`\n\n"
-        f"Confirm karne par channel create hoga.",
-        view=view,
-        mention_author=False
-    )
+            if not is_developer(actor):
+                raise PermissionError(
+                    "Developer access required."
+                )
 
-    return True
+            return await kick_member(
+                guild,
+                actor,
+                member,
+                reason
+            )
 
+        view = ActionConfirmView(
+            actor.id,
+            execute_kick
+        )
+
+        await message.reply(
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"Kick member: {member.mention}\n"
+            f"Reason: {reason}\n\n"
+            f"Confirm karne par member kick hoga.",
+            view=view,
+            mention_author=False
+        )
+
+        return True
+
+    # ---------- BAN MEMBER ----------
+
+    if re.search(r"\bban\b", text):
+
+        targets = [
+            member
+            for member in message.mentions
+            if bot.user is None or member.id != bot.user.id
+        ]
+
+        if not targets:
+            await message.reply(
+                "Member ko mention karo. Example: ban @member",
+                mention_author=False
+            )
+            return True
+
+        member = targets[0]
+
+        reason_match = re.search(
+            r"\breason\s+(.+)",
+            prompt,
+            re.IGNORECASE
+        )
+
+        reason = (
+            reason_match.group(1).strip()
+            if reason_match
+            else "No reason provided"
+        )
+
+        async def execute_ban():
+
+            if not is_developer(actor):
+                raise PermissionError(
+                    "Developer access required."
+                )
+
+            return await ban_member(
+                guild,
+                actor,
+                member,
+                reason
+            )
+
+        view = ActionConfirmView(
+            actor.id,
+            execute_ban
+        )
+
+        await message.reply(
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"Ban member: {member.mention}\n"
+            f"Reason: {reason}\n\n"
+            f"Confirm karne par member ban hoga.",
+            view=view,
+            mention_author=False
+        )
+
+        return True
+
+    # ---------- TEXT CHANNEL CREATION ----------
+
+    if action_requested and "channel" in text:
+
+        hashtag = re.search(
+            r"#([a-z0-9][a-z0-9_-]{0,90})",
+            text
+        )
+
+        if hashtag:
+
+            channel_name = hashtag.group(1)
+
+        else:
+
+            named = re.search(
+                r"(?:named|called|naam)\s+([a-z0-9][a-z0-9_-]{0,90})",
+                text
+            )
+
+            if not named:
+                await message.reply(
+                    "Channel ka naam batao. Example: #elyx-chat",
+                    mention_author=False
+                )
+                return True
+
+            channel_name = named.group(1)
+
+        existing = discord.utils.get(
+            guild.text_channels,
+            name=channel_name
+        )
+
+        if existing:
+            await message.reply(
+                f"#{channel_name} already exists.",
+                mention_author=False
+            )
+            return True
+
+        async def execute_creation():
+
+            if not is_developer(actor):
+                raise PermissionError(
+                    "Developer access required."
+                )
+
+            return await create_text_channel(
+                guild,
+                actor,
+                channel_name
+            )
+
+        view = ActionConfirmView(
+            actor.id,
+            execute_creation
+        )
+
+        await message.reply(
+            f"**ELYX ACTION APPROVAL**\n\n"
+            f"Create channel: `#{channel_name}`\n\n"
+            f"Confirm karne par channel create hoga.",
+            view=view,
+            mention_author=False
+        )
+
+        return True
+
+    return False
 
 # ================= AI HANDLER =================
 
@@ -476,7 +743,9 @@ async def handle_ai(message):
             response = await generate_reply(messages)
 
             if not isinstance(response, str) or not response.strip():
-                raise RuntimeError("AI returned an empty response.")
+                raise RuntimeError(
+                    "AI returned an empty response."
+                )
 
             save_conversation(
                 key,
@@ -491,7 +760,10 @@ async def handle_ai(message):
             remaining = response[MAX_MESSAGE_LENGTH:]
 
             if remaining.strip():
-                await send_response(message, remaining)
+                await send_response(
+                    message,
+                    remaining
+                )
 
         except AIUnavailableError:
 
@@ -512,7 +784,12 @@ async def handle_ai(message):
 
 @bot.command(name="kick")
 @commands.guild_only()
-async def kick_command(ctx, member: discord.Member, *, reason="No reason provided"):
+async def kick_command(
+    ctx,
+    member: discord.Member,
+    *,
+    reason="No reason provided"
+):
 
     await request_action(
         ctx,
@@ -528,7 +805,12 @@ async def kick_command(ctx, member: discord.Member, *, reason="No reason provide
 
 @bot.command(name="ban")
 @commands.guild_only()
-async def ban_command(ctx, member: discord.Member, *, reason="No reason provided"):
+async def ban_command(
+    ctx,
+    member: discord.Member,
+    *,
+    reason="No reason provided"
+):
 
     await request_action(
         ctx,
@@ -544,7 +826,12 @@ async def ban_command(ctx, member: discord.Member, *, reason="No reason provided
 
 @bot.command(name="nick")
 @commands.guild_only()
-async def nickname_command(ctx, member: discord.Member, *, nickname):
+async def nickname_command(
+    ctx,
+    member: discord.Member,
+    *,
+    nickname
+):
 
     await request_action(
         ctx,
@@ -575,7 +862,10 @@ async def create_channel_command(ctx, *, name):
 
 @bot.command(name="deletechannel")
 @commands.guild_only()
-async def delete_channel_command(ctx, channel: discord.TextChannel):
+async def delete_channel_command(
+    ctx,
+    channel: discord.TextChannel
+):
 
     await request_action(
         ctx,
@@ -605,7 +895,11 @@ async def create_role_command(ctx, *, name):
 
 @bot.command(name="roleadd")
 @commands.guild_only()
-async def add_role_command(ctx, member: discord.Member, role: discord.Role):
+async def add_role_command(
+    ctx,
+    member: discord.Member,
+    role: discord.Role
+):
 
     await request_action(
         ctx,
@@ -622,7 +916,11 @@ async def add_role_command(ctx, member: discord.Member, role: discord.Role):
 
 @bot.command(name="roleremove")
 @commands.guild_only()
-async def remove_role_command(ctx, member: discord.Member, role: discord.Role):
+async def remove_role_command(
+    ctx,
+    member: discord.Member,
+    role: discord.Role
+):
 
     await request_action(
         ctx,
@@ -683,7 +981,9 @@ async def read_code_command(ctx, *, filename):
 
     except Exception:
 
-        logger.exception("Project file read failed.")
+        logger.exception(
+            "Project file read failed."
+        )
 
         await ctx.reply(
             "Could not read that project file.",
@@ -736,7 +1036,9 @@ async def code_update_command(ctx, filename=None):
         )
 
         if not isinstance(review, dict):
-            raise RuntimeError("Invalid code review response.")
+            raise RuntimeError(
+                "Invalid code review response."
+            )
 
         errors = review.get("errors") or []
 
@@ -752,17 +1054,25 @@ async def code_update_command(ctx, filename=None):
         )
 
         if errors or not review_passed:
+
             await ctx.reply(
                 "**Code review failed.**\n"
-                + "\n".join(str(item) for item in errors[:5]),
+                + "\n".join(
+                    str(item)
+                    for item in errors[:5]
+                ),
                 mention_author=False
             )
+
             return
 
         warnings = review.get("warnings") or []
 
         warning_text = (
-            "\n".join(str(item) for item in warnings[:5])
+            "\n".join(
+                str(item)
+                for item in warnings[:5]
+            )
             if warnings
             else "No warnings."
         )
@@ -789,15 +1099,22 @@ async def code_update_command(ctx, filename=None):
                 filename,
                 new_content,
                 approved=True,
-                commit_message=f"Update {filename} through Elyx Developer"
+                commit_message=(
+                    f"Update {filename} through Elyx Developer"
+                )
             )
 
             if not isinstance(result, dict):
-                raise RuntimeError("Invalid GitHub response.")
+                raise RuntimeError(
+                    "Invalid GitHub response."
+                )
 
             if not result.get("success"):
                 raise RuntimeError(
-                    result.get("message", "GitHub update failed.")
+                    result.get(
+                        "message",
+                        "GitHub update failed."
+                    )
                 )
 
             return result.get(
@@ -819,7 +1136,9 @@ async def code_update_command(ctx, filename=None):
 
     except Exception:
 
-        logger.exception("Code update workflow failed.")
+        logger.exception(
+            "Code update workflow failed."
+        )
 
         await ctx.reply(
             "Code update failed. Check the bot logs.",
@@ -832,9 +1151,19 @@ async def code_update_command(ctx, filename=None):
 @bot.event
 async def on_ready():
 
-    logger.info("ELYX TRADING AI DEVELOPER ONLINE")
-    logger.info("Bot: %s", bot.user)
-    logger.info("Connected servers: %s", len(bot.guilds))
+    logger.info(
+        "ELYX TRADING AI DEVELOPER ONLINE"
+    )
+
+    logger.info(
+        "Bot: %s",
+        bot.user
+    )
+
+    logger.info(
+        "Connected servers: %s",
+        len(bot.guilds)
+    )
 
 
 @bot.event
@@ -850,7 +1179,9 @@ async def on_message(message):
 
     except Exception:
 
-        logger.exception("Message handler failed.")
+        logger.exception(
+            "Message handler failed."
+        )
 
     await bot.process_commands(message)
 
@@ -884,7 +1215,7 @@ async def developer_help(ctx):
         "`!roleremove @member @role`\n"
         "`!readcode filename.py`\n"
         "`!codeupdate filename.py` + attached file\n\n"
-        "Natural language channel creation is also supported.\n"
+        "Natural language channel, role, kick and ban actions are supported.\n"
         "Important actions require confirmation.",
         mention_author=False
     )
@@ -901,7 +1232,9 @@ def main():
 
     initialize_memory()
 
-    logger.info("Memory database initialized.")
+    logger.info(
+        "Memory database initialized."
+    )
 
     bot.run(TOKEN)
 

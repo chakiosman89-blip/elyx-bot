@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import asyncio
 import logging
 from datetime import timedelta
@@ -16,6 +17,7 @@ from tools_hard import (
     kick_member,
     ban_member,
     change_nickname,
+    create_category,
     create_text_channel,
     delete_channel,
     create_role,
@@ -26,13 +28,19 @@ from tools_hard import (
 from self_coder import (
     validate_file_path,
     read_project_file,
-    review_code_change
+    review_code_change,
 )
 
 from github_builder import GitHubBuilder
 
 
-# ================= CONFIGURATION =================
+# ============================================================
+# ELYX TRADING AI DEVELOPER
+# MAIN.PY — PART 1/3
+# ============================================================
+
+
+# ================= CONFIG =================
 
 load_dotenv()
 
@@ -44,9 +52,15 @@ TOKEN = (
 )
 
 PREFIX = "!"
+
+DEVELOPER_ROLE_ID = 1572448688700391454
+
 MAX_HISTORY = 12
 MAX_MESSAGE_LENGTH = 1900
 MAX_CODE_SIZE = 100000
+MAX_PROJECT_FILE_SIZE = 100000
+
+CODING_REQUEST_TIMEOUT = 180
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,13 +69,21 @@ logging.basicConfig(
 
 logger = logging.getLogger("ELYX_AI")
 
+
+# ================= GLOBAL STATE =================
+
 CONVERSATIONS = {}
 USER_LOCKS = {}
+
+# Developer coding sessions.
+# Keeps the current coding workflow separate from normal AI chat.
+CODING_SESSIONS = {}
 
 
 # ================= DISCORD SETUP =================
 
 intents = discord.Intents.default()
+
 intents.guilds = True
 intents.members = True
 intents.message_content = True
@@ -73,15 +95,43 @@ bot = commands.Bot(
 )
 
 
-# ================= ACCESS SYSTEM =================
+# ============================================================
+# ACCESS SYSTEM
+# ============================================================
+
+def has_developer_role(member):
+
+    if not isinstance(member, discord.Member):
+        return False
+
+    if member.guild is None:
+        return False
+
+    # Server owner always has developer-level access.
+    if member.id == member.guild.owner_id:
+        return True
+
+    return any(
+        role.id == DEVELOPER_ROLE_ID
+        for role in member.roles
+    )
+
 
 def is_developer(member):
 
     try:
+
+        if has_developer_role(member):
+            return True
+
         return get_access_level(member) == "developer"
 
     except Exception:
-        logger.exception("Developer access check failed.")
+
+        logger.exception(
+            "Developer access check failed."
+        )
+
         return False
 
 
@@ -90,7 +140,7 @@ async def developer_only(ctx):
     if not is_developer(ctx.author):
 
         await ctx.reply(
-            "You don't have permission to use this developer feature.",
+            "You don't have permission to use the Elyx Developer system.",
             mention_author=False
         )
 
@@ -99,7 +149,17 @@ async def developer_only(ctx):
     return True
 
 
-# ================= MEMORY SYSTEM =================
+def get_access_level_for_member(member):
+
+    if is_developer(member):
+        return "developer"
+
+    return "normal"
+
+
+# ============================================================
+# MEMORY
+# ============================================================
 
 def get_memory_context(user_id, access_level):
 
@@ -107,101 +167,92 @@ def get_memory_context(user_id, access_level):
 
     try:
 
-        user_memories = recall(user_id, limit=5)
+        user_memories = recall(
+            user_id,
+            limit=5
+        )
 
         for item in user_memories:
-            context.append(
-                f"User memory: {item.get('content', '')}"
+
+            content = item.get(
+                "content",
+                ""
             )
 
+            if content:
+                context.append(
+                    f"User memory: {content}"
+                )
+
     except Exception:
-        logger.exception("User memory retrieval failed.")
+
+        logger.exception(
+            "User memory retrieval failed."
+        )
 
     if access_level == "developer":
 
         try:
 
-            project_memories = recall_project(limit=10)
+            project_memories = recall_project(
+                limit=10
+            )
 
             for item in project_memories:
-                context.append(
-                    f"Elyx project memory: {item.get('content', '')}"
+
+                content = item.get(
+                    "content",
+                    ""
                 )
 
+                if content:
+                    context.append(
+                        f"Elyx project memory: {content}"
+                    )
+
         except Exception:
-            logger.exception("Project memory retrieval failed.")
+
+            logger.exception(
+                "Project memory retrieval failed."
+            )
 
     return "\n".join(context)
 
 
-# ================= CONVERSATION SYSTEM =================
+# ============================================================
+# CONVERSATION SYSTEM
+# ============================================================
 
 def get_user_key(message):
 
-    return f"{message.guild.id}:{message.author.id}"
+    guild_id = (
+        message.guild.id
+        if message.guild
+        else 0
+    )
+
+    return f"{guild_id}:{message.author.id}"
 
 
 def get_user_lock(key):
 
     if key not in USER_LOCKS:
+
         USER_LOCKS[key] = asyncio.Lock()
 
     return USER_LOCKS[key]
 
 
-def get_ai_messages(key, prompt, access_level, user_id):
+def save_conversation(
+    key,
+    prompt,
+    response
+):
 
-    history = list(CONVERSATIONS.get(key, []))
-
-    memory_context = get_memory_context(
-        user_id,
-        access_level
+    history = CONVERSATIONS.setdefault(
+        key,
+        []
     )
-
-    if access_level == "developer":
-
-        access_context = (
-            "ACCESS LEVEL: DEVELOPER. "
-            "This member has Elyx Developer access. "
-            "Understand Hindi, Hinglish and English naturally. "
-            "For supported Discord actions, use the action system. "
-            "Never provide code instead of performing a supported action. "
-            "Never claim an action was completed unless it actually was. "
-            "Never bypass confirmation or permissions."
-        )
-
-    else:
-
-        access_context = (
-            "ACCESS LEVEL: NORMAL MEMBER. "
-            "Provide normal AI assistance. "
-            "Do not claim to perform developer-only operations. "
-            "Never reveal developer-only information."
-        )
-
-    combined_context = access_context
-
-    if memory_context:
-        combined_context += (
-            "\n\nRelevant saved memories:\n"
-            + memory_context
-        )
-
-    history.append({
-        "role": "user",
-        "content": (
-            combined_context
-            + "\n\nMember message: "
-            + prompt
-        )
-    })
-
-    return history
-
-
-def save_conversation(key, prompt, response):
-
-    history = CONVERSATIONS.setdefault(key, [])
 
     history.extend([
         {
@@ -214,21 +265,163 @@ def save_conversation(key, prompt, response):
         }
     ])
 
-    CONVERSATIONS[key] = history[-MAX_HISTORY:]
+    CONVERSATIONS[key] = history[
+        -MAX_HISTORY:
+    ]
 
 
-# ================= MESSAGE SENDER =================
+# ============================================================
+# AI CONTEXT
+# ============================================================
 
-async def send_response(message, content):
+def build_ai_context(
+    message,
+    prompt,
+    access_level
+):
 
-    content = str(content).strip()
+    memory_context = get_memory_context(
+        message.author.id,
+        access_level
+    )
+
+    if access_level == "developer":
+
+        access_context = """
+ACCESS LEVEL: ELYX DEVELOPER
+
+The user has Elyx Developer access.
+
+This user is allowed to use the AI Developer Agent.
+
+The Developer Agent is NOT limited to a fixed list of future
+commands or features.
+
+The user may describe a new Discord feature, command, game,
+system, automation, UI, economy system, ticket system,
+leaderboard, moderation feature, or other software requirement
+in natural Hindi, Hinglish, or English.
+
+The AI Developer Agent must understand the requirement and
+work with the existing project instead of replying with generic
+coding questions.
+
+The agent may inspect project files, design an implementation,
+modify existing code, create compatible code, review changes,
+test changes, fix errors, and save approved changes.
+
+Do NOT pretend a feature was created when no code was changed.
+
+Do NOT claim GitHub was updated unless the GitHub operation
+actually succeeded.
+
+Do NOT bypass developer access.
+
+For destructive or sensitive Discord actions, confirmation is
+required before execution.
+
+The goal is to behave like an AI software developer working
+inside the Elyx Trading project.
+"""
+
+    else:
+
+        access_context = """
+ACCESS LEVEL: NORMAL MEMBER
+
+This member does NOT have Elyx Developer access.
+
+Provide normal AI assistance.
+
+The member may talk to the bot naturally.
+
+The member may ask normal questions, request normal assistance,
+ask for clean memes or entertainment, and use features that are
+explicitly available to normal members.
+
+Do NOT expose project source code.
+
+Do NOT expose GitHub information.
+
+Do NOT perform developer coding operations.
+
+Do NOT create, modify, delete, deploy, or commit project code
+for this member.
+
+Do NOT perform developer-only Discord administration.
+"""
+
+    result = access_context
+
+    if memory_context:
+
+        result += (
+            "\n\nRELEVANT MEMORY:\n"
+            + memory_context
+        )
+
+    return result
+
+
+def get_ai_messages(
+    message,
+    prompt,
+    access_level
+):
+
+    key = get_user_key(message)
+
+    history = list(
+        CONVERSATIONS.get(
+            key,
+            []
+        )
+    )
+
+    context = build_ai_context(
+        message,
+        prompt,
+        access_level
+    )
+
+    history.append({
+        "role": "user",
+        "content": (
+            context
+            + "\n\nCURRENT MEMBER MESSAGE:\n"
+            + prompt
+        )
+    })
+
+    return history
+
+
+# ============================================================
+# RESPONSE SENDER
+# ============================================================
+
+async def send_response(
+    message,
+    content
+):
+
+    content = str(
+        content
+    ).strip()
 
     if not content:
         return
 
-    for start in range(0, len(content), MAX_MESSAGE_LENGTH):
+    for start in range(
+        0,
+        len(content),
+        MAX_MESSAGE_LENGTH
+    ):
 
-        part = content[start:start + MAX_MESSAGE_LENGTH]
+        part = content[
+            start:
+            start + MAX_MESSAGE_LENGTH
+        ]
 
         await message.reply(
             part,
@@ -237,72 +430,628 @@ async def send_response(message, content):
         )
 
 
-# ================= NAME PARSER =================
+# ============================================================
+# CODING AGENT PROTOCOL
+# ============================================================
 
-def clean_requested_name(name):
+CODING_AGENT_SYSTEM = """
+You are ELYX TRADING AI DEVELOPER.
 
-    name = re.sub(
-        r"\s+",
-        " ",
-        str(name)
+You are an autonomous software-development agent operating
+inside a Discord bot project.
+
+The user is the authorized Elyx Developer.
+
+IMPORTANT:
+
+This is NOT a fixed-command assistant.
+
+The developer can request arbitrary software features in natural
+Hindi, Hinglish, or English.
+
+Examples:
+
+- create an invite leaderboard
+- create a ticket system
+- add close button
+- add transcript
+- create a new game
+- modify an existing command
+- add buttons
+- add database storage
+- change an existing system
+- fix a bug
+- improve UI
+- create an economy
+- create a ranking system
+
+You must reason about the requested implementation.
+
+You must inspect existing project code before changing it.
+
+Do not unnecessarily replace working systems.
+
+Prefer minimal compatible changes.
+
+Preserve existing architecture unless the requested feature
+requires an architectural change.
+
+When code changes are required, return machine-readable JSON.
+
+The JSON format MUST be:
+
+{
+  "summary": "short description",
+  "changes": [
+    {
+      "file": "filename.py",
+      "content": "COMPLETE NEW FILE CONTENT"
+    }
+  ]
+}
+
+Only include files that actually need changes.
+
+For an existing file, content must be the complete resulting file,
+not a partial snippet.
+
+Do not use markdown fences around the JSON.
+
+Do not invent successful execution.
+
+Do not claim tests passed unless testing was actually performed.
+
+Do not modify secrets, tokens, credentials, or environment values.
+
+Do not intentionally introduce malware, credential theft,
+self-propagating code, destructive payloads, or other harmful code.
+
+For normal Discord bot development, implement the requested
+feature normally.
+"""
+
+
+def looks_like_coding_request(prompt):
+
+    text = prompt.lower()
+
+    coding_patterns = [
+        "command bana",
+        "command banao",
+        "command banado",
+        "feature bana",
+        "feature banao",
+        "system bana",
+        "system banao",
+        "bot me add",
+        "bot mein add",
+        "discord me add",
+        "discord mein add",
+        "code bana",
+        "code banao",
+        "coding kar",
+        "coding karo",
+        "develop",
+        "developer",
+        "implement",
+        "create a command",
+        "make a command",
+        "create feature",
+        "make feature",
+        "create system",
+        "make system",
+        "add button",
+        "add ticket",
+        "add leaderboard",
+        "leaderboard bana",
+        "ticket bana",
+        "game bana",
+        "game banao",
+        "naya command",
+        "naya feature",
+        "new command",
+        "new feature",
+        "fix code",
+        "bug fix",
+        "github me save",
+        "github mein save",
+        "github update"
+    ]
+
+    return any(
+        pattern in text
+        for pattern in coding_patterns
+    )
+
+
+def extract_json_response(response):
+
+    if isinstance(response, dict):
+        return response
+
+    text = str(
+        response
     ).strip()
 
-    name = name.strip(" \t\n\r.,!?\"'`")
-
-    return name
-
-
-def extract_named_value(text, keyword):
-
-    pattern = (
-        rf"\b{keyword}\b\s+"
-        rf"(.+?)"
-        rf"(?=\s+\b(?:and inside|inside it|and then|then create|"
-        rf"and create|with colour|with color|colour|color)\b|$)"
-    )
-
-    match = re.search(
-        pattern,
+    # Remove accidental markdown fences.
+    text = re.sub(
+        r"^```(?:json)?\s*",
+        "",
         text,
-        re.IGNORECASE
+        flags=re.IGNORECASE
     )
 
-    if not match:
+    text = re.sub(
+        r"\s*```$",
+        "",
+        text
+    )
+
+    try:
+
+        return json.loads(text)
+
+    except json.JSONDecodeError:
+
+        # Try to locate the outer JSON object.
+        start = text.find("{")
+        end = text.rfind("}")
+
+        if start != -1 and end > start:
+
+            candidate = text[
+                start:
+                end + 1
+            ]
+
+            return json.loads(
+                candidate
+            )
+
+        raise
+
+
+# ============================================================
+# PROJECT FILE HELPERS
+# ============================================================
+
+PROJECT_FILES = [
+    "main.py",
+    "ai_brain.py",
+    "tools_hard.py",
+    "tools_normal.py",
+    "database.py",
+    "memory.py",
+    "code_tester.py",
+    "self_coder.py",
+    "github_builder.py",
+    "requirements.txt",
+]
+
+
+def safe_read_project_file(filename):
+
+    validate_file_path(
+        filename
+    )
+
+    content = read_project_file(
+        filename
+    )
+
+    if content is None:
         return None
 
-    return clean_requested_name(match.group(1))
+    content = str(
+        content
+    )
+
+    if len(content) > MAX_PROJECT_FILE_SIZE:
+        return (
+            content[:MAX_PROJECT_FILE_SIZE]
+            + "\n\n[FILE TRUNCATED]"
+        )
+
+    return content
 
 
-def channel_slug(name):
+def build_project_snapshot():
 
-    name = clean_requested_name(name).lower()
+    files = {}
 
-    name = re.sub(r"\s+", "-", name)
+    for filename in PROJECT_FILES:
 
-    name = re.sub(r"[^a-z0-9_-]", "", name)
+        try:
 
-    name = re.sub(r"-+", "-", name)
+            content = safe_read_project_file(
+                filename
+            )
 
-    return name[:100].strip("-_")
+            if content is not None:
+                files[filename] = content
+
+        except Exception:
+
+            logger.warning(
+                "Could not read project file: %s",
+                filename
+            )
+
+    return files
 
 
-# ================= ACTION CONFIRMATION =================
+def build_coding_messages(
+    message,
+    prompt,
+    project_snapshot
+):
 
-class ActionConfirmView(discord.ui.View):
+    project_text = []
 
-    def __init__(self, requester_id, action):
+    for filename, content in project_snapshot.items():
 
-        super().__init__(timeout=60)
+        project_text.append(
+            "\n===== FILE: "
+            + filename
+            + " =====\n"
+            + content
+        )
+
+    project_context = "".join(
+        project_text
+    )
+
+    developer_context = build_ai_context(
+        message,
+        prompt,
+        "developer"
+    )
+
+    return [
+        {
+            "role": "system",
+            "content": CODING_AGENT_SYSTEM
+        },
+        {
+            "role": "user",
+            "content": (
+                developer_context
+                + "\n\n"
+                + "CURRENT PROJECT FILES:\n"
+                + project_context
+                + "\n\n"
+                + "DEVELOPER REQUEST:\n"
+                + prompt
+                + "\n\n"
+                + "Return the required code changes as JSON."
+            )
+        }
+]
+
+# ============================================================
+# ELYX TRADING AI DEVELOPER
+# MAIN.PY — PART 2/3
+# ============================================================
+
+
+# ============================================================
+# CODE CHANGE VALIDATION
+# ============================================================
+
+def validate_coding_result(result):
+
+    if not isinstance(result, dict):
+        raise ValueError(
+            "AI coding result is not a valid object."
+        )
+
+    changes = result.get("changes")
+
+    if not isinstance(changes, list):
+        raise ValueError(
+            "AI coding result does not contain a valid changes list."
+        )
+
+    if not changes:
+        raise ValueError(
+            "AI did not produce any code changes."
+        )
+
+    validated = []
+
+    for change in changes:
+
+        if not isinstance(change, dict):
+            raise ValueError(
+                "Invalid code change entry."
+            )
+
+        filename = str(
+            change.get("file", "")
+        ).strip()
+
+        content = change.get(
+            "content"
+        )
+
+        if not filename:
+            raise ValueError(
+                "A code change is missing its filename."
+            )
+
+        if content is None:
+            raise ValueError(
+                f"Code content missing for {filename}."
+            )
+
+        content = str(content)
+
+        if len(content) > MAX_CODE_SIZE:
+            raise ValueError(
+                f"{filename} exceeds the maximum allowed code size."
+            )
+
+        validate_file_path(
+            filename
+        )
+
+        validated.append({
+            "file": filename,
+            "content": content
+        })
+
+    return validated
+
+
+# ============================================================
+# CODE REVIEW
+# ============================================================
+
+def review_generated_change(
+    filename,
+    content
+):
+
+    review = review_code_change(
+        filename,
+        content
+    )
+
+    if not isinstance(review, dict):
+        raise RuntimeError(
+            f"Code review returned an invalid result for {filename}."
+        )
+
+    errors = review.get(
+        "errors"
+    ) or []
+
+    if isinstance(errors, str):
+        errors = [errors]
+
+    if review.get("error"):
+        errors.append(
+            review["error"]
+        )
+
+    passed = review.get(
+        "review_passed",
+        review.get(
+            "valid",
+            not errors
+        )
+    )
+
+    warnings = review.get(
+        "warnings"
+    ) or []
+
+    if isinstance(warnings, str):
+        warnings = [warnings]
+
+    return {
+        "passed": bool(
+            passed and not errors
+        ),
+        "errors": [
+            str(item)
+            for item in errors
+        ],
+        "warnings": [
+            str(item)
+            for item in warnings
+        ]
+    }
+
+
+def review_all_changes(changes):
+
+    results = []
+
+    all_errors = []
+    all_warnings = []
+
+    for change in changes:
+
+        filename = change["file"]
+        content = change["content"]
+
+        result = review_generated_change(
+            filename,
+            content
+        )
+
+        results.append({
+            "file": filename,
+            **result
+        })
+
+        all_errors.extend(
+            f"{filename}: {error}"
+            for error in result["errors"]
+        )
+
+        all_warnings.extend(
+            f"{filename}: {warning}"
+            for warning in result["warnings"]
+        )
+
+    return {
+        "passed": not all_errors,
+        "results": results,
+        "errors": all_errors,
+        "warnings": all_warnings
+    }
+
+
+# ============================================================
+# GITHUB CODE CHANGE PREPARATION
+# ============================================================
+
+async def prepare_github_changes(changes):
+
+    builder = GitHubBuilder()
+
+    prepared = []
+
+    for change in changes:
+
+        filename = change["file"]
+        content = change["content"]
+
+        existing = await builder.get_file(
+            filename
+        )
+
+        prepared.append({
+            "file": filename,
+            "content": content,
+            "existing": bool(existing)
+        })
+
+    return prepared
+
+
+# ============================================================
+# GITHUB COMMIT
+# ============================================================
+
+async def commit_coding_changes(
+    changes,
+    commit_message
+):
+
+    if not is_developer(
+        coding_context_member
+    ):
+        raise PermissionError(
+            "Developer access is required."
+        )
+
+    builder = GitHubBuilder()
+
+    results = []
+
+    for change in changes:
+
+        filename = change["file"]
+        content = change["content"]
+
+        existing = await builder.get_file(
+            filename
+        )
+
+        # Existing files are updated.
+        if existing:
+
+            result = await builder.update_file(
+                filename,
+                content,
+                approved=True,
+                commit_message=commit_message
+            )
+
+        else:
+
+            # The current GitHubBuilder interface used by this
+            # project may not expose file creation.
+            # Never pretend a new file was created.
+            raise RuntimeError(
+                f"GitHub file `{filename}` does not already exist "
+                "and the current GitHubBuilder does not provide a "
+                "verified file-creation workflow."
+            )
+
+        if not isinstance(result, dict):
+
+            raise RuntimeError(
+                f"Invalid GitHub response for {filename}."
+            )
+
+        if not result.get("success"):
+
+            raise RuntimeError(
+                result.get(
+                    "message",
+                    f"GitHub update failed for {filename}."
+                )
+            )
+
+        results.append(
+            result.get(
+                "message",
+                f"{filename} updated successfully."
+            )
+        )
+
+    return results
+
+
+# ============================================================
+# CODING APPROVAL VIEW
+# ============================================================
+
+class CodingApprovalView(
+    discord.ui.View
+):
+
+    def __init__(
+        self,
+        requester_id,
+        changes,
+        summary,
+        warnings
+    ):
+
+        super().__init__(
+            timeout=120
+        )
 
         self.requester_id = requester_id
-        self.action = action
+        self.changes = changes
+        self.summary = summary
+        self.warnings = warnings
 
-    async def interaction_check(self, interaction):
+    async def interaction_check(
+        self,
+        interaction
+    ):
 
         if interaction.user.id != self.requester_id:
 
             await interaction.response.send_message(
-                "Only the person who requested this action can approve it.",
+                "Only the developer who requested this change can approve it.",
+                ephemeral=True
+            )
+
+            return False
+
+        if not is_developer(
+            interaction.user
+        ):
+
+            await interaction.response.send_message(
+                "Elyx Developer access is required.",
                 ephemeral=True
             )
 
@@ -311,10 +1060,14 @@ class ActionConfirmView(discord.ui.View):
         return True
 
     @discord.ui.button(
-        label="Confirm",
-        style=discord.ButtonStyle.danger
+        label="Save to GitHub",
+        style=discord.ButtonStyle.success
     )
-    async def confirm(self, interaction, button):
+    async def approve(
+        self,
+        interaction,
+        button
+    ):
 
         self.stop()
 
@@ -322,39 +1075,66 @@ class ActionConfirmView(discord.ui.View):
             child.disabled = True
 
         await interaction.response.edit_message(
-            content="Action approved. Executing...",
+            content=(
+                "ELYX DEVELOPER\n\n"
+                "Approved. Updating GitHub..."
+            ),
             view=self
         )
 
+        global coding_context_member
+
+        coding_context_member = interaction.user
+
         try:
 
-            result = await self.action()
+            results = await commit_coding_changes(
+                self.changes,
+                self.summary
+            )
 
-            result_text = (
-                str(result)
-                if result
-                else "Action completed."
+            result_text = "\n".join(
+                f"• {item}"
+                for item in results
             )
 
             await interaction.edit_original_response(
-                content=f"ELYX: {result_text}",
+                content=(
+                    "**ELYX DEVELOPER — SAVED**\n\n"
+                    f"{self.summary}\n\n"
+                    f"{result_text}\n\n"
+                    "GitHub update completed."
+                ),
                 view=self
             )
 
         except Exception as error:
 
-            logger.exception("Approved action failed.")
+            logger.exception(
+                "GitHub coding change failed."
+            )
 
             await interaction.edit_original_response(
-                content=f"Action failed: {error}",
+                content=(
+                    "**ELYX DEVELOPER — SAVE FAILED**\n\n"
+                    f"{error}"
+                ),
                 view=self
             )
+
+        finally:
+
+            coding_context_member = None
 
     @discord.ui.button(
         label="Cancel",
         style=discord.ButtonStyle.secondary
     )
-    async def cancel(self, interaction, button):
+    async def cancel(
+        self,
+        interaction,
+        button
+    ):
 
         self.stop()
 
@@ -362,7 +1142,10 @@ class ActionConfirmView(discord.ui.View):
             child.disabled = True
 
         await interaction.response.edit_message(
-            content="Action cancelled.",
+            content=(
+                "**ELYX DEVELOPER**\n\n"
+                "Code change cancelled. Nothing was saved to GitHub."
+            ),
             view=self
         )
 
@@ -372,1287 +1155,867 @@ class ActionConfirmView(discord.ui.View):
             child.disabled = True
 
 
-async def request_action(ctx, description, action):
+# ============================================================
+# CODING AGENT EXECUTION
+# ============================================================
 
-    if not await developer_only(ctx):
+async def run_coding_agent(
+    message,
+    prompt
+):
+
+    if not is_developer(
+        message.author
+    ):
+
+        await message.reply(
+            "Elyx Developer access required.",
+            mention_author=False
+        )
+
         return
 
-    view = ActionConfirmView(
-        requester_id=ctx.author.id,
-        action=action
+    key = get_user_key(
+        message
     )
 
-    await ctx.reply(
-        f"**ELYX ACTION APPROVAL**\n\n"
-        f"{description}\n\n"
-        f"Confirm karne par hi action execute hoga.",
-        view=view,
-        mention_author=False
+    lock = get_user_lock(
+        key
+    )
+
+    async with lock:
+
+        thinking = await message.reply(
+            "ELYX DEVELOPER is inspecting the project...",
+            mention_author=False
         )
 
-# ================= NATURAL LANGUAGE ACTION SYSTEM =================
+        try:
 
-async def handle_natural_discord_action(message, prompt):
+            # -----------------------------------------------
+            # 1. READ CURRENT PROJECT
+            # -----------------------------------------------
 
-    text = prompt.lower().strip()
+            project_snapshot = (
+                build_project_snapshot()
+            )
 
-    guild = message.guild
-    actor = message.author
+            if not project_snapshot:
 
-    # Developer access check
-    if not is_developer(actor):
+                raise RuntimeError(
+                    "Project files could not be read."
+                )
+
+            await thinking.edit(
+                content=(
+                    "ELYX DEVELOPER\n\n"
+                    "Project inspected.\n"
+                    "Designing the requested change..."
+                )
+            )
+
+            # -----------------------------------------------
+            # 2. ASK AI TO DESIGN THE CODE CHANGE
+            # -----------------------------------------------
+
+            coding_messages = (
+                build_coding_messages(
+                    message,
+                    prompt,
+                    project_snapshot
+                )
+            )
+
+            ai_response = await asyncio.wait_for(
+                generate_reply(
+                    coding_messages
+                ),
+                timeout=CODING_REQUEST_TIMEOUT
+            )
+
+            if not ai_response:
+
+                raise RuntimeError(
+                    "AI Developer returned an empty response."
+                )
+
+            # -----------------------------------------------
+            # 3. PARSE AI CODE
+            # -----------------------------------------------
+
+            try:
+
+                coding_result = (
+                    extract_json_response(
+                        ai_response
+                    )
+                )
+
+            except Exception:
+
+                logger.exception(
+                    "AI returned invalid coding JSON."
+                )
+
+                raise RuntimeError(
+                    "AI Developer returned invalid code-change data."
+                )
+
+            changes = validate_coding_result(
+                coding_result
+            )
+
+            # -----------------------------------------------
+            # 4. REVIEW EVERY CHANGED FILE
+            # -----------------------------------------------
+
+            await thinking.edit(
+                content=(
+                    "ELYX DEVELOPER\n\n"
+                    f"Generated {len(changes)} code change(s).\n"
+                    "Reviewing the changes..."
+                )
+            )
+
+            review = review_all_changes(
+                changes
+            )
+
+            if not review["passed"]:
+
+                error_text = "\n".join(
+                    f"• {item}"
+                    for item in review["errors"][:10]
+                )
+
+                await thinking.edit(
+                    content=(
+                        "**ELYX DEVELOPER — CODE REVIEW FAILED**\n\n"
+                        f"{error_text}\n\n"
+                        "Nothing was saved to GitHub."
+                    )
+                )
+
+                return
+
+            # -----------------------------------------------
+            # 5. PREPARE GITHUB CHECK
+            # -----------------------------------------------
+
+            await thinking.edit(
+                content=(
+                    "ELYX DEVELOPER\n\n"
+                    "Code review passed.\n"
+                    "Checking GitHub files..."
+                )
+            )
+
+            prepared = await prepare_github_changes(
+                changes
+            )
+
+            missing_files = [
+                item["file"]
+                for item in prepared
+                if not item["existing"]
+            ]
+
+            if missing_files:
+
+                await thinking.edit(
+                    content=(
+                        "**ELYX DEVELOPER — STOPPED**\n\n"
+                        "The AI requested files that do not already "
+                        "exist in the verified GitHub update workflow:\n\n"
+                        + "\n".join(
+                            f"• `{name}`"
+                            for name in missing_files
+                        )
+                        + "\n\n"
+                        "Nothing was saved."
+                    )
+                )
+
+                return
+
+            # -----------------------------------------------
+            # 6. BUILD APPROVAL SUMMARY
+            # -----------------------------------------------
+
+            summary = coding_result.get(
+                "summary",
+                "Requested Elyx project update"
+            )
+
+            summary = str(
+                summary
+            ).strip()
+
+            if not summary:
+
+                summary = (
+                    "Requested Elyx project update"
+                )
+
+            warning_text = ""
+
+            if review["warnings"]:
+
+                warning_text = (
+                    "\n\nWarnings:\n"
+                    + "\n".join(
+                        f"• {item}"
+                        for item in review["warnings"][:10]
+                    )
+                )
+
+            file_text = "\n".join(
+                f"• `{change['file']}`"
+                for change in changes
+            )
+
+            approval_text = (
+                "**ELYX DEVELOPER — CODE READY**\n\n"
+                f"**Request:** {prompt}\n\n"
+                f"**Plan:** {summary}\n\n"
+                f"**Files to update:**\n"
+                f"{file_text}\n\n"
+                "Code review: **PASSED**"
+                f"{warning_text}\n\n"
+                "**Save to GitHub?**"
+            )
+
+            view = CodingApprovalView(
+                requester_id=message.author.id,
+                changes=changes,
+                summary=(
+                    f"Elyx Developer: {summary}"
+                ),
+                warnings=review["warnings"]
+            )
+
+            await thinking.edit(
+                content=approval_text,
+                view=view
+            )
+
+        except asyncio.TimeoutError:
+
+            await thinking.edit(
+                content=(
+                    "**ELYX DEVELOPER**\n\n"
+                    "The coding request took too long to process.\n"
+                    "Nothing was saved."
+                )
+            )
+
+        except AIUnavailableError:
+
+            await thinking.edit(
+                content=(
+                    "**ELYX DEVELOPER**\n\n"
+                    "AI service is temporarily unavailable.\n"
+                    "Nothing was saved."
+                )
+            )
+
+        except Exception as error:
+
+            logger.exception(
+                "AI Developer workflow failed."
+            )
+
+            await thinking.edit(
+                content=(
+                    "**ELYX DEVELOPER — ERROR**\n\n"
+                    f"{error}\n\n"
+                    "Nothing was saved to GitHub."
+                )
+            )
+
+
+# ============================================================
+# NATURAL DEVELOPER ROUTER
+# ============================================================
+
+async def handle_developer_request(
+    message,
+    prompt
+):
+
+    if not is_developer(
+        message.author
+    ):
         return False
 
-    # ---------- CATEGORY + CHANNEL CREATION ----------
-
-    category_match = re.search(
-        r"\b(?:category|categor[iy])\s+(?:named|called|naam)\s+(.+)",
-        prompt,
-        re.IGNORECASE
-    )
-
-    channel_match = re.search(
-        r"\bchannel\s+(?:named|called|naam)\s+(.+)",
-        prompt,
-        re.IGNORECASE
-    )
-
-    wants_category = bool(
-        re.search(r"\bcategory\b", text)
-    )
-
-    wants_channel = bool(
-        re.search(r"\bchannel\b", text)
-    )
-
-    if (
-        wants_category
-        and re.search(r"\b(create|make|bana|banao|banado|banade)\b", text)
+    # Developer coding requests go to the
+    # general-purpose AI coding agent.
+    if looks_like_coding_request(
+        prompt
     ):
 
-        if not category_match:
-            await message.reply(
-                "Category ka poora naam batao.",
-                mention_author=False
-            )
-            return True
-
-        category_name = clean_requested_name(
-            category_match.group(1)
-        )
-
-        if not category_name or len(category_name) > 100:
-            await message.reply(
-                "Invalid category name.",
-                mention_author=False
-            )
-            return True
-
-        nested_channel_name = None
-
-        if re.search(
-            r"\b(?:inside|andar|uske andar)\b",
-            text
-        ):
-
-            if not channel_match:
-                await message.reply(
-                    "Category ke andar channel ka poora naam bhi batao.",
-                    mention_author=False
-                )
-                return True
-
-            nested_channel_name = channel_slug(
-                channel_match.group(1)
-            )
-
-            if not nested_channel_name:
-                await message.reply(
-                    "Invalid channel name.",
-                    mention_author=False
-                )
-                return True
-
-        existing_category = discord.utils.get(
-            guild.categories,
-            name=category_name
-        )
-
-        if existing_category:
-            await message.reply(
-                f"Category `{category_name}` already exists.",
-                mention_author=False
-            )
-            return True
-
-        async def execute_category():
-
-            if not is_developer(actor):
-                raise PermissionError("Developer access required.")
-
-            if not actor.guild_permissions.manage_channels:
-                raise PermissionError(
-                    "You need Manage Channels permission."
-                )
-
-            bot_member = guild.me
-
-            if (
-                bot_member is None
-                or not bot_member.guild_permissions.manage_channels
-            ):
-                raise PermissionError(
-                    "Bot needs Manage Channels permission."
-                )
-
-            category = await guild.create_category(
-                name=category_name,
-                reason=f"Elyx Developer action by {actor}"
-            )
-
-            result = f"Category `{category.name}` created."
-
-            if nested_channel_name:
-
-                channel = await guild.create_text_channel(
-                    name=nested_channel_name,
-                    category=category,
-                    reason=f"Elyx Developer action by {actor}"
-                )
-
-                result += (
-                    f"\nChannel #{channel.name} created inside "
-                    f"`{category.name}`."
-                )
-
-            return result
-
-        description = f"Create category: `{category_name}`"
-
-        if nested_channel_name:
-            description += (
-                f"\nCreate channel: `#{nested_channel_name}`"
-                f"\nInside category: `{category_name}`"
-            )
-
-        view = ActionConfirmView(
-            actor.id,
-            execute_category
-        )
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"{description}\n\n"
-            f"Confirm karne par hi dono actions execute honge.",
-            view=view,
-            mention_author=False
-        )
-
-        return True
-
-    # ---------- TEXT CHANNEL CREATION ----------
-
-    if (
-        wants_channel
-        and re.search(r"\b(create|make|bana|banao|banado|banade)\b", text)
-    ):
-
-        if not channel_match:
-            await message.reply(
-                "Channel ka poora naam batao. Example: channel named Elyx Battle",
-                mention_author=False
-            )
-            return True
-
-        channel_name = channel_slug(
-            channel_match.group(1)
-        )
-
-        if not channel_name:
-            await message.reply(
-                "Invalid channel name.",
-                mention_author=False
-            )
-            return True
-
-        existing = discord.utils.get(
-            guild.text_channels,
-            name=channel_name
-        )
-
-        if existing:
-            await message.reply(
-                f"Channel `#{channel_name}` already exists.",
-                mention_author=False
-            )
-            return True
-
-        async def execute_channel():
-
-            if not is_developer(actor):
-                raise PermissionError("Developer access required.")
-
-            return await create_text_channel(
-                guild,
-                actor,
-                channel_name
-            )
-
-        view = ActionConfirmView(
-            actor.id,
-            execute_channel
-        )
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"Create channel: `#{channel_name}`\n\n"
-            f"Confirm karne par channel create hoga.",
-            view=view,
-            mention_author=False
-        )
-
-        return True
-
-    # ---------- ROLE CREATION ----------
-
-    if (
-        re.search(r"\brole\b", text)
-        and re.search(r"\b(create|make|bana|banao|banado|banade)\b", text)
-    ):
-
-        role_match = re.search(
-            r"\brole\s+(?:named|called|naam)\s+(.+)",
-            prompt,
-            re.IGNORECASE
-        )
-
-        if not role_match:
-
-            role_match = re.search(
-                r"\b(?:create|make|bana|banao|banado|banade)\s+(.+?)\s+role\b",
-                prompt,
-                re.IGNORECASE
-            )
-
-        if not role_match:
-            await message.reply(
-                "Role ka poora naam batao. Example: create role named Battle Manager",
-                mention_author=False
-            )
-            return True
-
-        role_name = clean_requested_name(
-            role_match.group(1)
-        )
-
-        # Remove colour words only when they are clearly colour instructions.
-        colour_map = {
-            "purple": 0x800080,
-            "red": 0xFF0000,
-            "blue": 0x0000FF,
-            "green": 0x00FF00,
-            "yellow": 0xFFFF00,
-            "orange": 0xFFA500,
-            "pink": 0xFFC0CB,
-            "cyan": 0x00FFFF,
-            "gold": 0xFFD700,
-            "black": 0x000000,
-            "white": 0xFFFFFF
-        }
-
-        colour = discord.Colour.default()
-
-        hex_match = re.search(
-            r"#([0-9a-fA-F]{6})",
+        await run_coding_agent(
+            message,
             prompt
-        )
-
-        if hex_match:
-            colour = discord.Colour(
-                int(hex_match.group(1), 16)
-            )
-
-        else:
-            for colour_name, hex_value in colour_map.items():
-
-                if re.search(
-                    rf"\b{colour_name}\b",
-                    text
-                ):
-                    colour = discord.Colour(hex_value)
-                    break
-
-        if not role_name or len(role_name) > 100:
-            await message.reply(
-                "Invalid role name.",
-                mention_author=False
-            )
-            return True
-
-        existing = discord.utils.get(
-            guild.roles,
-            name=role_name
-        )
-
-        if existing:
-            await message.reply(
-                f"Role `{role_name}` already exists.",
-                mention_author=False
-            )
-            return True
-
-        async def execute_role():
-
-            if not is_developer(actor):
-                raise PermissionError("Developer access required.")
-
-            return await create_role(
-                guild,
-                actor,
-                role_name,
-                colour=colour
-            )
-
-        view = ActionConfirmView(
-            actor.id,
-            execute_role
-        )
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"Create role: `{role_name}`\n"
-            f"Colour: `{colour}`\n\n"
-            f"Confirm karne par role create hoga.",
-            view=view,
-            mention_author=False
-        )
-
-        return True
-
-    # ---------- ROLE ASSIGNMENT ----------
-
-    if (
-        message.mentions
-        and re.search(
-            r"\b(role|rank)\b",
-            text
-        )
-        and re.search(
-            r"\b(add|give|assign|de|do|lagao|laga|dena)\b",
-            text
-        )
-    ):
-
-        targets = [
-            member
-            for member in message.mentions
-            if isinstance(member, discord.Member)
-            and member.id != actor.id
-        ]
-
-        if not targets:
-            targets = [
-                member
-                for member in message.mentions
-                if isinstance(member, discord.Member)
-            ]
-
-        if not targets:
-            await message.reply(
-                "Jis member ko role dena hai usko mention karo.",
-                mention_author=False
-            )
-            return True
-
-        member = targets[0]
-
-        role_match = re.search(
-            r"\brole\s+(?:named|called|naam)?\s*(.+)",
-            prompt,
-            re.IGNORECASE
-        )
-
-        role = None
-
-        if role_match:
-
-            requested_role_name = clean_requested_name(
-                role_match.group(1)
-            )
-
-            role = discord.utils.find(
-                lambda item: item.name.lower()
-                == requested_role_name.lower(),
-                guild.roles
-            )
-
-        if role is None:
-
-            role_candidates = [
-                item for item in guild.roles
-                if item.name.lower() in text
-            ]
-
-            if role_candidates:
-                role = max(
-                    role_candidates,
-                    key=lambda item: len(item.name)
-                )
-
-        if role is None:
-            await message.reply(
-                "Role ka exact naam nahi mila. Role ka naam message mein likho.",
-                mention_author=False
-            )
-            return True
-
-        async def execute_role_assignment():
-
-            if not is_developer(actor):
-                raise PermissionError("Developer access required.")
-
-            return await set_member_role(
-                guild,
-                actor,
-                member.id,
-                role.id,
-                add=True
-            )
-
-        view = ActionConfirmView(
-            actor.id,
-            execute_role_assignment
-        )
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"Member: {member.mention}\n"
-            f"Add role: `{role.name}`\n\n"
-            f"Confirm karne par role assign hoga.",
-            view=view,
-            mention_author=False
-        )
-
-        return True
-
-    # ---------- ROLE REMOVAL ----------
-
-    if (
-        message.mentions
-        and re.search(r"\b(role|rank)\b", text)
-        and re.search(r"\b(remove|hata|remove karo|nikalo)\b", text)
-    ):
-
-        targets = [
-            member for member in message.mentions
-            if isinstance(member, discord.Member)
-        ]
-
-        if not targets:
-            return True
-
-        member = targets[0]
-
-        role = discord.utils.find(
-            lambda item: item.name.lower() in text,
-            guild.roles
-        )
-
-        if role is None:
-            await message.reply(
-                "Role ka exact naam message mein likho.",
-                mention_author=False
-            )
-            return True
-
-        async def execute_role_removal():
-
-            if not is_developer(actor):
-                raise PermissionError("Developer access required.")
-
-            return await set_member_role(
-                guild,
-                actor,
-                member.id,
-                role.id,
-                add=False
-            )
-
-        view = ActionConfirmView(
-            actor.id,
-            execute_role_removal
-        )
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"Member: {member.mention}\n"
-            f"Remove role: `{role.name}`\n\n"
-            f"Confirm karne par role remove hoga.",
-            view=view,
-            mention_author=False
-        )
-
-        return True
-
-    # ---------- MUTE / TIMEOUT ----------
-
-    mute_requested = bool(
-        re.search(
-            r"\b(mute|timeout|mute\s+kar|chup\s+kar|timeout\s+kar)\b",
-            text
-        )
-    )
-
-    if mute_requested:
-
-        targets = [
-            member
-            for member in message.mentions
-            if isinstance(member, discord.Member)
-            and member.id != actor.id
-            and (bot.user is None or member.id != bot.user.id)
-        ]
-
-        if not targets:
-            await message.reply(
-                "Jis member ko mute karna hai usko mention karo.",
-                mention_author=False
-            )
-            return True
-
-        member = targets[0]
-
-        duration_match = re.search(
-            r"(\d+)\s*(minute|min|minutes|m|hour|hours|h|second|seconds|s)\b",
-            text
-        )
-
-        duration = 5
-        unit = "minutes"
-
-        if duration_match:
-
-            amount = int(duration_match.group(1))
-            unit_text = duration_match.group(2)
-
-            if unit_text in ("hour", "hours", "h"):
-                duration = amount * 60
-                unit = "minutes"
-
-            elif unit_text in ("second", "seconds", "s"):
-                duration = max(1, amount // 60)
-                unit = "minutes"
-
-            else:
-                duration = amount
-                unit = "minutes"
-
-        if duration < 1 or duration > 40320:
-            await message.reply(
-                "Timeout duration 1 minute se 28 days ke beech honi chahiye.",
-                mention_author=False
-            )
-            return True
-
-        async def execute_timeout():
-
-            if not is_developer(actor):
-                raise PermissionError("Developer access required.")
-
-            return await timeout_member(
-                guild,
-                actor,
-                member,
-                duration
-            )
-
-        view = ActionConfirmView(
-            actor.id,
-            execute_timeout
-        )
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"Timeout member: {member.mention}\n"
-            f"Duration: `{duration} minutes`\n\n"
-            f"Confirm karne par timeout lagega.",
-            view=view,
-            mention_author=False
-        )
-
-        return True
-
-    # ---------- KICK MEMBER ----------
-
-    if re.search(r"\b(kick|nikaal|remove member)\b", text):
-
-        targets = [
-            member
-            for member in message.mentions
-            if isinstance(member, discord.Member)
-            and (bot.user is None or member.id != bot.user.id)
-        ]
-
-        if not targets:
-            await message.reply(
-                "Member ko mention karo.",
-                mention_author=False
-            )
-            return True
-
-        member = targets[0]
-
-        async def execute_kick():
-
-            if not is_developer(actor):
-                raise PermissionError("Developer access required.")
-
-            return await kick_member(
-                guild,
-                actor,
-                member,
-                "Approved Elyx Developer action"
-            )
-
-        view = ActionConfirmView(actor.id, execute_kick)
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"Kick member: {member.mention}\n\n"
-            f"Confirm karne par member kick hoga.",
-            view=view,
-            mention_author=False
-        )
-
-        return True
-
-    # ---------- BAN MEMBER ----------
-
-    if re.search(r"\b(ban|permanently remove)\b", text):
-
-        targets = [
-            member
-            for member in message.mentions
-            if isinstance(member, discord.Member)
-            and (bot.user is None or member.id != bot.user.id)
-        ]
-
-        if not targets:
-            await message.reply(
-                "Member ko mention karo.",
-                mention_author=False
-            )
-            return True
-
-        member = targets[0]
-
-        async def execute_ban():
-
-            if not is_developer(actor):
-                raise PermissionError("Developer access required.")
-
-            return await ban_member(
-                guild,
-                actor,
-                member,
-                "Approved Elyx Developer action"
-            )
-
-        view = ActionConfirmView(actor.id, execute_ban)
-
-        await message.reply(
-            f"**ELYX ACTION APPROVAL**\n\n"
-            f"Ban member: {member.mention}\n\n"
-            f"Confirm karne par member ban hoga.",
-            view=view,
-            mention_author=False
         )
 
         return True
 
     return False
 
-# ================= AI HANDLER =================
 
-async def handle_ai(message):
+# =========================
+# PART 3/3 — DISCORD ROUTER
+# =========================
 
+class HardActionConfirmationView(discord.ui.View):
+    def __init__(self, action_data, actor):
+        super().__init__(timeout=60)
+        self.action_data = action_data
+        self.actor = actor
+        self.done = False
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.actor.id:
+            await interaction.response.send_message(
+                "Only the developer who requested this action can confirm it.",
+                ephemeral=True
+            )
+            return
+
+        if self.done:
+            return
+
+        self.done = True
+        self.disable_all_items()
+
+        try:
+            result = await execute_hard_action(
+                interaction.guild,
+                self.actor,
+                self.action_data
+            )
+
+            await interaction.response.edit_message(
+                content=f"Confirmed.\n\n{result}",
+                view=self
+            )
+
+        except HardAccessError as exc:
+            await interaction.response.edit_message(
+                content=f"Action failed:\n{exc}",
+                view=self
+            )
+
+        except discord.Forbidden:
+            await interaction.response.edit_message(
+                content=(
+                    "Action failed: Discord denied the request. "
+                    "Check the bot permission and role hierarchy."
+                ),
+                view=self
+            )
+
+        except discord.HTTPException as exc:
+            await interaction.response.edit_message(
+                content=f"Discord API error: {exc}",
+                view=self
+            )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.actor.id:
+            await interaction.response.send_message(
+                "Only the developer who requested this action can cancel it.",
+                ephemeral=True
+            )
+            return
+
+        self.done = True
+        self.disable_all_items()
+
+        await interaction.response.edit_message(
+            content="Action cancelled.",
+            view=self
+        )
+
+
+def disable_all_items(self):
+    for item in self.children:
+        item.disabled = True
+
+
+HardActionConfirmationView.disable_all_items = disable_all_items
+
+
+def _quoted_or_plain_name(text):
+    text = text.strip()
+
+    if text.startswith('"') and text.endswith('"'):
+        return text[1:-1].strip()
+
+    if text.startswith("'") and text.endswith("'"):
+        return text[1:-1].strip()
+
+    return text.strip()
+
+
+def parse_hard_action(message):
+    """
+    Converts simple natural-language developer requests
+    into controlled Discord actions.
+
+    IMPORTANT:
+    This only prepares the action.
+    It does NOT execute anything.
+    """
+
+    text = message.strip()
+
+    # ---------------------------------
+    # CATEGORY
+    # ---------------------------------
+
+    category_match = re.search(
+        r"(?:create|make|add|banao|banado|bana\s+do)\s+"
+        r"(?:a\s+)?(?:category|categor(?:y|ies))"
+        r"\s+(?:named|called|naam\s*(?:ki|ka)?|name\s*)?"
+        r"(.+?)\s*$",
+        text,
+        re.IGNORECASE
+    )
+
+    if category_match:
+        name = _quoted_or_plain_name(category_match.group(1))
+
+        if name:
+            return {
+                "type": "create_category",
+                "name": name
+            }
+
+    # ---------------------------------
+    # CHANNEL INSIDE CATEGORY
+    # ---------------------------------
+
+    nested_channel_patterns = [
+        r"(?:create|make|add|banao|banado|bana\s+do)\s+"
+        r"(?:a\s+)?(?:text\s+)?channel\s+"
+        r"(.+?)\s+(?:inside|under|in|under\s+category)\s+(.+)$",
+
+        r"(?:create|make|add|banao|banado|bana\s+do)\s+"
+        r"(?:a\s+)?(?:text\s+)?channel\s+"
+        r"(.+?)\s+(?:category|cat)\s+(.+)$",
+    ]
+
+    for pattern in nested_channel_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+
+        if match:
+            channel_name = _quoted_or_plain_name(match.group(1))
+            category_name = _quoted_or_plain_name(match.group(2))
+
+            if channel_name and category_name:
+                return {
+                    "type": "create_text_channel",
+                    "name": channel_name,
+                    "category": category_name
+                }
+
+    # ---------------------------------
+    # ROLE
+    # ---------------------------------
+
+    role_match = re.search(
+        r"(?:create|make|add|banao|banado|bana\s+do)\s+"
+        r"(?:a\s+)?role\s+"
+        r"(?:named|called|naam\s*(?:ka|ki)?|name\s*)?"
+        r"(.+?)(?:\s+(?:colour|color)\s+(.+))?$",
+        text,
+        re.IGNORECASE
+    )
+
+    if role_match:
+        role_name = _quoted_or_plain_name(role_match.group(1))
+        colour = role_match.group(2)
+
+        if role_name:
+            return {
+                "type": "create_role",
+                "name": role_name,
+                "colour": colour.strip() if colour else None
+            }
+
+    # ---------------------------------
+    # TIMEOUT
+    # ---------------------------------
+
+    timeout_match = re.search(
+        r"(?:timeout|time\s*out|mute)\s+"
+        r"(<@!?\d+>|<@\d+>|\d{15,22})"
+        r".*?"
+        r"(\d+)\s*(minute|minutes|min|mins|hour|hours|hr|hrs)",
+        text,
+        re.IGNORECASE
+    )
+
+    if timeout_match:
+        target = timeout_match.group(1)
+        amount = int(timeout_match.group(2))
+        unit = timeout_match.group(3).lower()
+
+        if unit.startswith("hour") or unit.startswith("hr"):
+            amount *= 60
+
+        return {
+            "type": "timeout_member",
+            "target": target,
+            "duration_minutes": amount
+        }
+
+    # ---------------------------------
+    # KICK
+    # ---------------------------------
+
+    kick_match = re.search(
+        r"(?:kick|remove)\s+"
+        r"(<@!?\d+>|<@\d+>|\d{15,22})",
+        text,
+        re.IGNORECASE
+    )
+
+    if kick_match:
+        return {
+            "type": "kick_member",
+            "target": kick_match.group(1)
+        }
+
+    # ---------------------------------
+    # BAN
+    # ---------------------------------
+
+    ban_match = re.search(
+        r"(?:ban)\s+"
+        r"(<@!?\d+>|<@\d+>|\d{15,22})",
+        text,
+        re.IGNORECASE
+    )
+
+    if ban_match:
+        return {
+            "type": "ban_member",
+            "target": ban_match.group(1)
+        }
+
+    return None
+
+
+def describe_hard_action(action):
+    action_type = action["type"]
+
+    if action_type == "create_category":
+        return (
+            f"Create category:\n"
+            f"**{action['name']}**"
+        )
+
+    if action_type == "create_text_channel":
+        return (
+            f"Create channel:\n"
+            f"**#{action['name']}**\n"
+            f"Inside category:\n"
+            f"**{action['category']}**"
+        )
+
+    if action_type == "create_role":
+        colour_text = action.get("colour") or "default"
+
+        return (
+            f"Create role:\n"
+            f"**{action['name']}**\n"
+            f"Colour: **{colour_text}**"
+        )
+
+    if action_type == "timeout_member":
+        return (
+            f"Timeout member:\n"
+            f"**{action['target']}**\n"
+            f"Duration: **{action['duration_minutes']} minute(s)**"
+        )
+
+    if action_type == "kick_member":
+        return (
+            f"Kick member:\n"
+            f"**{action['target']}**"
+        )
+
+    if action_type == "ban_member":
+        return (
+            f"Ban member:\n"
+            f"**{action['target']}**"
+        )
+
+    return "Unknown developer action."
+
+
+async def execute_hard_action(guild, actor, action):
+    action_type = action["type"]
+
+    if action_type == "create_category":
+        category = await create_category(
+            guild,
+            actor,
+            action["name"]
+        )
+
+        return (
+            f"Category created successfully:\n"
+            f"**{category.name}**"
+        )
+
+    if action_type == "create_text_channel":
+        return await create_text_channel(
+            guild,
+            actor,
+            action["name"],
+            action["category"]
+        )
+
+    if action_type == "create_role":
+        return await create_role(
+            guild,
+            actor,
+            action["name"],
+            action.get("colour")
+        )
+
+    if action_type == "timeout_member":
+        return await timeout_member(
+            guild,
+            actor,
+            action["target"],
+            action["duration_minutes"]
+        )
+
+    if action_type == "kick_member":
+        return await kick_member(
+            guild,
+            actor,
+            action["target"]
+        )
+
+    if action_type == "ban_member":
+        return await ban_member(
+            guild,
+            actor,
+            action["target"]
+        )
+
+    raise HardAccessError("Unknown developer action.")
+
+
+async def handle_hard_request(message):
+    if message.guild is None:
+        return False
+
+    if not is_developer(message.author):
+        return False
+
+    action = parse_hard_action(message.content)
+
+    if action is None:
+        return False
+
+    confirmation_text = (
+        "Elyx Developer Action\n\n"
+        f"{describe_hard_action(action)}\n\n"
+        "This action will change the Discord server.\n"
+        "Confirm before I execute it."
+    )
+
+    view = HardActionConfirmationView(
+        action,
+        message.author
+    )
+
+    await message.reply(
+        confirmation_text,
+        view=view,
+        mention_author=False
+    )
+
+    return True
+
+
+async def handle_normal_ai_message(message):
     if message.guild is None:
         return
 
-    if not isinstance(message.author, discord.Member):
+    if message.author.bot:
         return
 
-    if bot.user is None:
+    bot_user = bot.user
+
+    if bot_user is None:
         return
 
-    prompt = re.sub(
-        rf"<@!?{bot.user.id}>",
-        "",
-        message.content
-    ).strip()
+    mentioned = bot_user in message.mentions
 
-    if not prompt:
+    if not mentioned:
+        return
+
+    cleaned = message.content
+
+    cleaned = cleaned.replace(
+        f"<@{bot_user.id}>",
+        ""
+    )
+
+    cleaned = cleaned.replace(
+        f"<@!{bot_user.id}>",
+        ""
+    )
+
+    cleaned = cleaned.strip()
+
+    if not cleaned:
         await message.reply(
-            "Haan, batao kya help chahiye?",
-            mention_author=False
-        )
-        return
-
-    access_level = (
-        "developer"
-        if is_developer(message.author)
-        else "normal"
-    )
-
-    if access_level == "developer":
-
-        handled = await handle_natural_discord_action(
-            message,
-            prompt
-        )
-
-        if handled:
-            return
-
-    key = get_user_key(message)
-    lock = get_user_lock(key)
-
-    async with lock:
-
-        thinking = await message.reply(
-            "ELYX AI is thinking...",
-            mention_author=False
-        )
-
-        try:
-
-            messages = get_ai_messages(
-                key,
-                prompt,
-                access_level,
-                message.author.id
-            )
-
-            response = await generate_reply(messages)
-
-            if not isinstance(response, str) or not response.strip():
-                raise RuntimeError(
-                    "AI returned an empty response."
-                )
-
-            save_conversation(
-                key,
-                prompt,
-                response
-            )
-
-            await thinking.edit(
-                content=response[:MAX_MESSAGE_LENGTH]
-            )
-
-            remaining = response[MAX_MESSAGE_LENGTH:]
-
-            if remaining.strip():
-                await send_response(
-                    message,
-                    remaining
-                )
-
-        except AIUnavailableError:
-
-            await thinking.edit(
-                content="ELYX AI is temporarily unavailable. Please try again."
-            )
-
-        except Exception:
-
-            logger.exception("AI response failed.")
-
-            await thinking.edit(
-                content="Something went wrong. Please try again."
-            )
-
-
-# ================= SERVER MANAGEMENT =================
-
-@bot.command(name="kick")
-@commands.guild_only()
-async def kick_command(
-    ctx,
-    member: discord.Member,
-    *,
-    reason="No reason provided"
-):
-
-    await request_action(
-        ctx,
-        f"Kick member: {member}\nReason: {reason}",
-        lambda: kick_member(
-            ctx.guild,
-            ctx.author,
-            member,
-            reason
-        )
-    )
-
-
-@bot.command(name="ban")
-@commands.guild_only()
-async def ban_command(
-    ctx,
-    member: discord.Member,
-    *,
-    reason="No reason provided"
-):
-
-    await request_action(
-        ctx,
-        f"Ban member: {member}\nReason: {reason}",
-        lambda: ban_member(
-            ctx.guild,
-            ctx.author,
-            member,
-            reason
-        )
-    )
-
-
-@bot.command(name="nick")
-@commands.guild_only()
-async def nickname_command(
-    ctx,
-    member: discord.Member,
-    *,
-    nickname
-):
-
-    await request_action(
-        ctx,
-        f"Change nickname of {member} to: {nickname}",
-        lambda: change_nickname(
-            ctx.guild,
-            ctx.author,
-            member,
-            nickname
-        )
-    )
-
-
-@bot.command(name="createchannel")
-@commands.guild_only()
-async def create_channel_command(ctx, *, name):
-
-    await request_action(
-        ctx,
-        f"Create text channel: #{name}",
-        lambda: create_text_channel(
-            ctx.guild,
-            ctx.author,
-            name
-        )
-    )
-
-
-@bot.command(name="deletechannel")
-@commands.guild_only()
-async def delete_channel_command(
-    ctx,
-    channel: discord.TextChannel
-):
-
-    await request_action(
-        ctx,
-        f"Delete channel: {channel.mention}",
-        lambda: delete_channel(
-            ctx.guild,
-            ctx.author,
-            channel.id
-        )
-    )
-
-
-@bot.command(name="createrole")
-@commands.guild_only()
-async def create_role_command(ctx, *, name):
-
-    await request_action(
-        ctx,
-        f"Create role: {name}",
-        lambda: create_role(
-            ctx.guild,
-            ctx.author,
-            name
-        )
-    )
-
-
-@bot.command(name="roleadd")
-@commands.guild_only()
-async def add_role_command(
-    ctx,
-    member: discord.Member,
-    role: discord.Role
-):
-
-    await request_action(
-        ctx,
-        f"Add role {role.name} to {member}",
-        lambda: set_member_role(
-            ctx.guild,
-            ctx.author,
-            member.id,
-            role.id,
-            add=True
-        )
-    )
-
-
-@bot.command(name="roleremove")
-@commands.guild_only()
-async def remove_role_command(
-    ctx,
-    member: discord.Member,
-    role: discord.Role
-):
-
-    await request_action(
-        ctx,
-        f"Remove role {role.name} from {member}",
-        lambda: set_member_role(
-            ctx.guild,
-            ctx.author,
-            member.id,
-            role.id,
-            add=False
-        )
-    )
-
-
-@bot.command(name="timeout")
-@commands.guild_only()
-async def timeout_command(
-    ctx,
-    member: discord.Member,
-    minutes: int = 5
-):
-
-    await request_action(
-        ctx,
-        f"Timeout member: {member}\nDuration: {minutes} minutes",
-        lambda: timeout_member(
-            ctx.guild,
-            ctx.author,
-            member,
-            minutes
-        )
-    )
-
-
-# ================= CODE READER =================
-
-@bot.command(name="readcode")
-@commands.guild_only()
-async def read_code_command(ctx, *, filename):
-
-    if not await developer_only(ctx):
-        return
-
-    try:
-
-        validate_file_path(filename)
-
-        content = read_project_file(filename)
-
-        if not content:
-            await ctx.reply(
-                "File is empty or unavailable.",
-                mention_author=False
-            )
-            return
-
-        content = str(content)
-        lines = content.splitlines()
-
-        summary = (
-            f"**File:** `{filename}`\n"
-            f"**Lines:** {len(lines)}\n"
-            f"**Characters:** {len(content)}\n\n"
-            f"```python\n"
-            f"{content[:1500]}\n"
-            f"```"
-        )
-
-        await ctx.reply(
-            summary,
-            mention_author=False
-        )
-
-        if len(content) > 1500:
-            await ctx.send(
-                "File has more content. Use the file-reading workflow to inspect the remaining code."
-            )
-
-    except Exception:
-
-        logger.exception(
-            "Project file read failed."
-        )
-
-        await ctx.reply(
-            "Could not read that project file.",
-            mention_author=False
-        )
-
-
-# ================= CODE REVIEW + GITHUB =================
-
-@bot.command(name="codeupdate")
-@commands.guild_only()
-async def code_update_command(ctx, filename=None):
-
-    if not await developer_only(ctx):
-        return
-
-    if not filename:
-        await ctx.reply(
-            "Usage: !codeupdate filename.py\nAttach the new code file.",
-            mention_author=False
-        )
-        return
-
-    if not ctx.message.attachments:
-        await ctx.reply(
-            "Please attach the new code file.",
-            mention_author=False
-        )
-        return
-
-    attachment = ctx.message.attachments[0]
-
-    if attachment.size > MAX_CODE_SIZE:
-        await ctx.reply(
-            "File is too large. Maximum size is 100 KB.",
+            "Haan, bolo kya help chahiye?",
             mention_author=False
         )
         return
 
     try:
-
-        validate_file_path(filename)
-
-        raw_content = await attachment.read()
-        new_content = raw_content.decode("utf-8")
-
-        review = review_code_change(
-            filename,
-            new_content
+        reply = await generate_reply(
+            cleaned,
+            user_id=str(message.author.id),
+            username=message.author.display_name
         )
 
-        if not isinstance(review, dict):
-            raise RuntimeError(
-                "Invalid code review response."
-            )
+        if not reply:
+            reply = "Sorry, abhi reply generate nahi ho paya."
 
-        errors = review.get("errors") or []
-
-        if isinstance(errors, str):
-            errors = [errors]
-
-        if review.get("error"):
-            errors.append(review["error"])
-
-        review_passed = review.get(
-            "review_passed",
-            review.get("valid", not errors)
-        )
-
-        if errors or not review_passed:
-
-            await ctx.reply(
-                "**Code review failed.**\n"
-                + "\n".join(
-                    str(item)
-                    for item in errors[:5]
-                ),
-                mention_author=False
-            )
-
-            return
-
-        warnings = review.get("warnings") or []
-
-        warning_text = (
-            "\n".join(
-                str(item)
-                for item in warnings[:5]
-            )
-            if warnings
-            else "No warnings."
-        )
-
-        builder = GitHubBuilder()
-
-        existing_file = await builder.get_file(filename)
-
-        if not existing_file:
-            await ctx.reply(
-                "GitHub file not found. This workflow updates existing files only.",
-                mention_author=False
-            )
-            return
-
-        async def approved_update():
-
-            if not is_developer(ctx.author):
-                raise PermissionError(
-                    "Developer access is no longer available."
-                )
-
-            result = await builder.update_file(
-                filename,
-                new_content,
-                approved=True,
-                commit_message=(
-                    f"Update {filename} through Elyx Developer"
-                )
-            )
-
-            if not isinstance(result, dict):
-                raise RuntimeError(
-                    "Invalid GitHub response."
-                )
-
-            if not result.get("success"):
-                raise RuntimeError(
-                    result.get(
-                        "message",
-                        "GitHub update failed."
-                    )
-                )
-
-            return result.get(
-                "message",
-                "GitHub file updated successfully."
-            )
-
-        await request_action(
-            ctx,
-            (
-                f"**ELYX GITHUB CODE UPDATE**\n"
-                f"File: `{filename}`\n"
-                f"Review: Passed\n"
-                f"Warnings:\n{warning_text}\n\n"
-                f"GitHub commit requires your confirmation."
-            ),
-            approved_update
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Code update workflow failed."
-        )
-
-        await ctx.reply(
-            "Code update failed. Check the bot logs.",
+        await message.reply(
+            reply[:MAX_MESSAGE_LENGTH],
             mention_author=False
         )
 
+    except AIUnavailableError:
+        await message.reply(
+            "AI service abhi available nahi hai. Thodi der baad try karo.",
+            mention_author=False
+        )
 
-# ================= EVENTS =================
+    except Exception as exc:
+        logging.exception(
+            "Normal AI message failed: %s",
+            exc
+        )
+
+        await message.reply(
+            "AI reply generate karte waqt error aa gaya.",
+            mention_author=False
+        )
+
 
 @bot.event
 async def on_ready():
-
-    logger.info(
-        "ELYX TRADING AI DEVELOPER ONLINE"
-    )
-
-    logger.info(
-        "Bot: %s",
+    logging.info(
+        "Elyx Trading AI Developer connected as %s",
         bot.user
     )
 
-    logger.info(
-        "Connected servers: %s",
+    logging.info(
+        "Developer Role ID: %s",
+        DEVELOPER_ROLE_ID
+    )
+
+    logging.info(
+        "Connected guilds: %s",
         len(bot.guilds)
     )
 
 
 @bot.event
 async def on_message(message):
-
     if message.author.bot:
         return
 
-    try:
-
-        if bot.user and bot.user in message.mentions:
-            await handle_ai(message)
-
-    except Exception:
-
-        logger.exception(
-            "Message handler failed."
-        )
-
-    await bot.process_commands(message)
-
-
-# ================= BASIC COMMANDS =================
-
-@bot.command(name="elyx")
-async def elyx_status(ctx):
-
-    await ctx.reply(
-        "ELYX TRADING AI DEVELOPER is online.",
-        mention_author=False
-    )
-
-
-@bot.command(name="devhelp")
-async def developer_help(ctx):
-
-    if not await developer_only(ctx):
+    if message.guild is None:
         return
 
-    await ctx.reply(
-        "**ELYX DEVELOPER**\n\n"
-        "You can talk to Elyx naturally in Hindi, Hinglish or English.\n\n"
-        "**Available commands:**\n"
-        "`!kick @member reason`\n"
-        "`!ban @member reason`\n"
-        "`!nick @member nickname`\n"
-        "`!createchannel name`\n"
-        "`!deletechannel #channel`\n"
-        "`!createrole name`\n"
-        "`!roleadd @member @role`\n"
-        "`!roleremove @member @role`\n"
-        "`!timeout @member 5`\n"
-        "`!readcode filename.py`\n"
-        "`!codeupdate filename.py` + attached file\n\n"
-        "Supported natural-language actions require confirmation.",
-        mention_author=False
-    )
+    # ---------------------------------
+    # DEVELOPER HARD ACTIONS
+    # ---------------------------------
 
+    try:
+        handled = await handle_hard_request(message)
 
-# ================= START BOT =================
+        if handled:
+            return
 
-def main():
-
-    if not TOKEN:
-        raise RuntimeError(
-            "Discord token missing. Set DISCORD_TOKEN in environment variables."
+    except Exception as exc:
+        logging.exception(
+            "Hard action router failed: %s",
+            exc
         )
 
-    initialize_memory()
+        await message.reply(
+            "Developer action process mein error aa gaya.",
+            mention_author=False
+        )
 
-    logger.info(
-        "Memory database initialized."
+        return
+
+    # ---------------------------------
+    # DEVELOPER AI CODING AGENT
+    # ---------------------------------
+
+    if is_developer(message.author):
+        try:
+            if looks_like_coding_request(message.content):
+                await handle_developer_request(message)
+                return
+
+        except Exception as exc:
+            logging.exception(
+                "Developer coding request failed: %s",
+                exc
+            )
+
+            await message.reply(
+                "Coding request process karte waqt error aa gaya.",
+                mention_author=False
+            )
+
+            return
+
+    # ---------------------------------
+    # NORMAL MEMBER AI
+    # ---------------------------------
+
+    await handle_normal_ai_message(message)
+
+
+async def start_bot():
+    if not TOKEN:
+        raise RuntimeError(
+            "DISCORD_TOKEN environment variable is missing."
+        )
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s"
     )
 
-    bot.run(TOKEN)
+    await initialize_memory()
+
+    await bot.start(TOKEN)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(start_bot())
+    except KeyboardInterrupt:
+        pass

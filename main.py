@@ -189,11 +189,10 @@ async def call_gemini_keys(prompt: str) -> str:
 
 async def call_groq_backup(prompt: str) -> str:
     if not GROQ_API_KEY:
-        raise RuntimeError("No GROQ_API_KEY set.")
-         groq_endpoint = "https://groq.com" + "/v1/chat/completions"
-
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    payload = {
+        raise RuntimeError("No GROQ_API_KEY set.") 
+groq_endpoint = "https://groq.com" + "/v1/chat/completions"
+headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
             {"role": "system", "content": MASTER_SYSTEM_PROMPT},

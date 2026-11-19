@@ -136,21 +136,21 @@ Write the complete Python code to implement this feature on `bot`."""
 @bot.tree.command(name="upgrades", description="Installed AI features ki list dekhein")
 async def list_upgrades(interaction: discord.Interaction):
     if not is_authorized(interaction.user):
-        await interaction.response.send_message("âŒ Aapke paas is command ki permission nahi hai.", ephemeral=True)
+        await interaction.response.send_message("❌ Aapke paas is command ki permission nahi hai.", ephemeral=True)
         return
 
     modules = load_saved_modules()
     if not modules:
-        await interaction.response.send_message("ðŸ“­ Abhi tak koi custom feature install nahi kiya gaya hai. Mujhe tag karke kuch banwayein!", ephemeral=True)
+        await interaction.response.send_message("📭 Abhi tak koi custom feature install nahi kiya gaya hai. Mujhe tag karke kuch banwayein!", ephemeral=True)
         return
 
     embed = discord.Embed(
-        title="ðŸš€ Elyx Trading - Installed Upgrades",
+        title="🚀 Elyx Trading - Installed Upgrades",
         color=discord.Color.gold()
     )
     for mod_id, info in modules.items():
         embed.add_field(
-            name=f"ðŸ”¹ {mod_id}",
+            name=f"🔹 {mod_id}",
             value=f"**Request:** {info.get('request', 'N/A')[:100]}",
             inline=False
         )
@@ -160,7 +160,7 @@ async def list_upgrades(interaction: discord.Interaction):
 @app_commands.describe(feature_name="List mein se feature ka naam (jaise feature_1)")
 async def remove_upgrade(interaction: discord.Interaction, feature_name: str):
     if not is_authorized(interaction.user):
-        await interaction.response.send_message("âŒ Aapke paas is command ki permission nahi hai.", ephemeral=True)
+        await interaction.response.send_message("❌ Aapke paas is command ki permission nahi hai.", ephemeral=True)
         return
 
     modules = load_saved_modules()
@@ -168,18 +168,18 @@ async def remove_upgrade(interaction: discord.Interaction, feature_name: str):
         del modules[feature_name]
         save_modules(modules)
         await interaction.response.send_message(
-            f"ðŸ—‘ï¸ **{feature_name}** delete kar diya gaya hai. Changes apply karne ke liye Fadehost se bot ko ek baar restart karein."
+            f"🗑️ **{feature_name}** delete kar diya gaya hai. Changes apply karne ke liye bot ko ek baar restart karein."
         )
     else:
-        await interaction.response.send_message(f"âš ï¸ `{feature_name}` nahi mila. `/upgrades` se sahi naam check karein.", ephemeral=True)
+        await interaction.response.send_message(f"⚠️ `{feature_name}` nahi mila. `/upgrades` se sahi naam check karein.", ephemeral=True)
 
 # ==========================================
 # BOT EVENTS & DREAM-IT-BUILD-IT TRIGGER
 # ==========================================
 @bot.event
 async def on_ready():
-    print(f"âœ… Logged in as {bot.user} (ID: {bot.user.id})")
-    print(f"ðŸ” Authorized IDs (Role/User): {ALLOWED_IDS}")
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"🔑 Authorized IDs (Role/User): {ALLOWED_IDS}")
 
     for guild in bot.guilds:
         try:
@@ -194,81 +194,77 @@ async def on_ready():
             execute_dynamic_code(info["code"])
             loaded_count += 1
         except Exception as e:
-            print(f"âŒ Error loading module {mod_id}: {e}")
+            print(f"❌ Error loading {mod_id}: {e}")
 
+    print(f"📦 Loaded {loaded_count}/{len(modules)} saved custom modules.")
     try:
         synced = await bot.tree.sync()
-        print(f"âš¡ Loaded {loaded_count} saved features & synced {len(synced)} slash commands!")
+        print(f"🔄 Synced {len(synced)} slash commands.")
     except Exception as e:
-        print(f"âš ï¸ Slash command sync error: {e}")
+        print(f"⚠️ Slash command sync failed: {e}")
 
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    if bot.user in message.mentions:
+    # Check agar bot ko tag kiya gaya hai
+    if bot.user and bot.user.mentioned_in(message) and not message.mention_everyone:
         if not is_authorized(message.author):
-            await message.reply("â›” **Access Denied:** Sirf authorized Role (`1572448688700391454`) wale hi mujhe upgrade kar sakte hain.")
+            await message.reply("❌ Sirf authorized owners/roles hi naye features bana sakte hain.")
             return
 
         if not ai_client:
-            await message.reply("âš ï¸ Fadehost mein `GEMINI_API_KEY` missing hai! Pehle API key set karein.")
+            await message.reply("⚠️ `GEMINI_API_KEY` set nahi hai. Apne host panel mein key add karein.")
             return
 
-        clean_prompt = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
-        if not clean_prompt:
-            await message.reply("ðŸ‘‹ Bol bhai! Kya naya command ya feature banana hai? Example: `@Elyx Trading ek /invite_leaderboard command bana sabke invites dikhane ke liye`")
+        clean_request = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
+        if not clean_request:
+            await message.reply("👋 Bataiye kya naya feature ya command banana hai? (Jaise: *'Ek `/ping` command banao'* ya *'Invite leaderboard banao'*)")
             return
 
-        status_msg = await message.reply("ðŸ§  **Samajh gaya! Code likh raha hoon aur khud ko upgrade kar raha hoon...**")
+        status_msg = await message.reply("⚙️ **AI Engine kaam kar raha hai...** Naya feature code kiya ja raha hai, kripya pratiksha karein.")
 
         try:
             modules = load_saved_modules()
-            generated_code = await generate_feature_code(clean_prompt, modules)
+            generated_code = await generate_feature_code(clean_request, modules)
 
+            # Code ko test aur register karein
             execute_dynamic_code(generated_code)
 
-            feature_id = f"feature_{len(modules) + 1}"
+            # Slash commands ko turant sync karein
+            await bot.tree.sync()
+
+            # Unique feature ID ke saath save karein
+            idx = 1
+            while f"feature_{idx}" in modules:
+                idx += 1
+            feature_id = f"feature_{idx}"
+
             modules[feature_id] = {
-                "request": clean_prompt,
+                "request": clean_request,
                 "code": generated_code
             }
             save_modules(modules)
 
-            if message.guild:
-                bot.tree.copy_global_to(guild=message.guild)
-                await bot.tree.sync(guild=message.guild)
-            await bot.tree.sync()
-
-            embed = discord.Embed(
-                title="âœ… Upgrade Complete! (Dream It, Build It)",
-                description=f"**Naya feature live ho gaya hai!**
-
-**ID:** `{feature_id}`
-**Request:** {clean_prompt}",
-                color=discord.Color.green()
-            )
-            embed.set_footer(text="Elyx Trading Self-Upgrading Engine â€¢ Restart ke baad bhi safe rahega")
-            await status_msg.edit(content=None, embed=embed)
-
-        except Exception as e:
-            err_trace = traceback.format_exc()[-800:]
             await status_msg.edit(
-                content=f"âŒ **Upgrade mein error aaya:**
-```py
-{err_trace}
-```
-Thoda aur clear bolkar dubara try karein!"
+                content=f"✅ **Feature Ready (`{feature_id}`)!**\nAapka naya feature install aur sync ho gaya hai. Agar slash command banayi hai toh Discord mein `/` dabakar check karein!"
             )
+        except Exception as e:
+            err_trace = traceback.format_exc()[-600:]
+            await status_msg.edit(
+                content=f"❌ **Feature banane mein error aaya:**\n```py\n{e}\n```\nDubara thoda aur clear likh kar try karein."
+            )
+            print(f"Generation/Execution Error:\n{err_trace}")
 
     await bot.process_commands(message)
 
 # ==========================================
-# RUN BOT
+# START BOT
 # ==========================================
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
-        print("âŒ ERROR: DISCORD_TOKEN environment variable missing in Fadehost!")
+        print("❌ ERROR: DISCORD_TOKEN environment variable missing hai!")
     else:
         bot.run(DISCORD_TOKEN)
+            

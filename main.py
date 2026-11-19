@@ -1,6 +1,8 @@
 import os
 import re
+import io
 import json
+import time
 import base64
 import asyncio
 import traceback
@@ -10,8 +12,14 @@ from discord.ext import commands
 from google import genai
 from google.genai import types
 
+try:
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
 # ==========================================
-# 1. FADEHOST ENV KEYS & CONFIG
+# BLOCK 1: FADEHOST ENV KEYS & HARD ACCESS
 # ==========================================
 DISCORD_TOKEN = (
     os.getenv("DISCORD_TOKEN")
@@ -29,14 +37,14 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = os.getenv("GITHUB_REPOSITORY", "chakiosman89-blip/elyx-bot").strip()
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
 
-DEFAULT_ALLOWED_ID = "1572448688700391454"
-ALLOWED_IDS = {1572448688700391454}
-for item in os.getenv("OWNER_ID", DEFAULT_ALLOWED_ID).split(","):
+HARD_ACCESS_ID = 1572448688700391454
+ALLOWED_IDS = {HARD_ACCESS_ID}
+for item in os.getenv("OWNER_ID", str(HARD_ACCESS_ID)).split(","):
     if item.strip().isdigit():
         ALLOWED_IDS.add(int(item.strip()))
 
 # ==========================================
-# 2. BOT SETUP & STORAGE FILES
+# BLOCK 2: BOT SETUP, STORAGE & GITHUB SYNC
 # ==========================================
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="-", intents=intents, help_command=None)
@@ -45,15 +53,33 @@ DATA_DIR = "bot_data"
 MODULES_FILE = os.path.join(DATA_DIR, "dynamic_modules.json")
 MEMORY_FILE = os.path.join(DATA_DIR, "user_memories.json")
 os.makedirs(DATA_DIR, exist_ok=True)
+
 invite_cache = {}
+REGISTERED_COMMANDS = set()
+REGISTERED_LISTENERS = []
+MODULE_LOCK = asyncio.Lock()
+_RECENT_MSG_CACHE = {}
 
 
 def is_authorized(member: discord.abc.User) -> bool:
+    if not member:
+        return False
     if member.id in ALLOWED_IDS:
         return True
     if isinstance(member, discord.Member):
         if any(role.id in ALLOWED_IDS for role in member.roles):
             return True
+    return False
+
+
+def is_duplicate_message(key: str, ttl: float = 10.0) -> bool:
+    now = time.time()
+    expired = [k for k, ts in _RECENT_MSG_CACHE.items() if now - ts > ttl]
+    for k in expired:
+        _RECENT_MSG_CACHE.pop(k, None)
+    if key in _RECENT_MSG_CACHE:
+        return True
+    _RECENT_MSG_CACHE[key] = now
     return False
 
 
@@ -70,8 +96,8 @@ def load_json(path: str) -> dict:
 async def sync_file_to_github(repo_path: str, data_dict: dict, commit_msg: str):
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return
-        api_url = f"https://github.com{GITHUB_REPO}/contents/{repo_path}"
-
+    gh_host = "api" + ".github.com"
+    api_url = f"https://{gh_host}/repos/{GITHUB_REPO}/contents/{repo_path}"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
@@ -94,7 +120,7 @@ async def sync_file_to_github(repo_path: str, data_dict: dict, commit_msg: str):
 
             async with session.put(api_url, headers=headers, json=payload) as put_resp:
                 if put_resp.status in (200, 201):
-                    print(f"☁️ Synced {repo_path} to GitHub")
+                    print(f"✅ Synced {repo_path} to GitHub")
     except Exception as e:
         print(f"⚠️ GitHub sync skipped: {e}")
 
@@ -111,213 +137,323 @@ async def save_memories(memories: dict):
     await sync_file_to_github("bot_data/user_memories.json", memories, "Auto-save user memory")
 
 
+# ==========================================
+# BLOCK 3: BUILT-IN IMAGE & MEME ENGINE
+# ==========================================
+async def generate_image_bytes(prompt_text: str, top_text: str = "", bottom_text: str = "") -> io.BytesIO:
+    clean_prompt = re.sub(r"[^a-zA-Z0-9 ,.-]", "", prompt_text).strip() or "funny gaming meme"
+    encoded_prompt = aiohttp.helpers.quote(clean_prompt)
+    img_host = "image" + ".pollinations.ai"
+    url = f"https://{img_host}/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true&seed={int(time.time()) % 99999}"
+
+    raw_bytes = None
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=25) as resp:
+                if resp.status == 200:
+                    raw_bytes = await resp.read()
+    except Exception:
+        raw_bytes = None
+
+    if raw_bytes and PIL_AVAILABLE and (top_text or bottom_text):
+        try:
+            img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+            draw = ImageDraw.Draw(img)
+            w, h = img.size
+            font_size = max(36, w // 16)
+            try:
+                font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+            except Exception:
+                font = ImageFont.load_default()
+
+            def draw_meme_line(text: str, y_pos: int):
+                text = text.upper()
+                tw = int(draw.textlength(text, font=font))
+                x_pos = max(10, (w - tw) // 2)
+                for dx in (-3, 0, 3):
+                    for dy in (-3, 0, 3):
+                        draw.text((x_pos + dx, y_pos + dy), text, font=font, fill="black")
+                draw.text((x_pos, y_pos), text, font=font, fill="white")
+
+            if top_text:
+                draw_meme_line(top_text[:45], 25)
+            if bottom_text:
+                draw_meme_line(bottom_text[:45], h - font_size - 40)
+
+            out = io.BytesIO()
+            img.save(out, format="PNG")
+            out.seek(0)
+            return out
+        except Exception:
+            pass
+
+    if raw_bytes:
+        out = io.BytesIO(raw_bytes)
+        out.seek(0)
+        return out
+
+    if PIL_AVAILABLE:
+        img = Image.new("RGB", (800, 450), color=(28, 32, 46))
+        draw = ImageDraw.Draw(img)
+        draw.text((40, 180), (top_text or clean_prompt)[:60], fill=(255, 255, 255))
+        if bottom_text:
+            draw.text((40, 240), bottom_text[:60], fill=(255, 220, 90))
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        out.seek(0)
+        return out
+
+    raise RuntimeError("Image generate nahi ho payi.")
+
+# ==========================================
+# BLOCK 4: ZERO-DUPLICATE DYNAMIC LOADER
+# ==========================================
+def unload_all_dynamic_modules():
+    for cmd_name in list(REGISTERED_COMMANDS):
+        try:
+            bot.remove_command(cmd_name)
+        except Exception:
+            pass
+    REGISTERED_COMMANDS.clear()
+
+    for event_name, func in list(REGISTERED_LISTENERS):
+        try:
+            bot.remove_listener(func, event_name)
+        except Exception:
+            pass
+    REGISTERED_LISTENERS.clear()
+
+
+def _tracked_command(*args, **kwargs):
+    def decorator(func):
+        cmd_name = kwargs.get("name") or (next(iter(args), None) or func.__name__)
+        if bot.get_command(cmd_name):
+            bot.remove_command(cmd_name)
+        cmd_obj = commands.command(*args, **kwargs)(func)
+        bot.add_command(cmd_obj)
+        REGISTERED_COMMANDS.add(cmd_name)
+        return cmd_obj
+    return decorator
+
+
+def _tracked_listen(name=None):
+    def decorator(func):
+        event_name = name or func.__name__
+        bot.add_listener(func, event_name)
+        REGISTERED_LISTENERS.append((event_name, func))
+        return func
+    return decorator
+
+
+class SafeBotProxy:
+    def __init__(self, real_bot):
+        self._bot = real_bot
+
+    def command(self, *args, **kwargs):
+        return _tracked_command(*args, **kwargs)
+
+    def listen(self, name=None):
+        return _tracked_listen(name)
+
+    def event(self, func):
+        return _tracked_listen(func.__name__)(func)
+
+    def __getattr__(self, item):
+        return getattr(self._bot, item)
+
+
 def execute_dynamic_code(code_str: str):
     env = {
-        "bot": bot,
+        "bot": SafeBotProxy(bot),
         "discord": discord,
         "commands": commands,
         "os": os,
+        "re": re,
+        "io": io,
         "json": json,
+        "time": time,
         "asyncio": asyncio,
+        "aiohttp": aiohttp,
         "invite_cache": invite_cache,
         "DATA_DIR": DATA_DIR,
         "ALLOWED_IDS": ALLOWED_IDS,
         "is_authorized": is_authorized,
+        "is_duplicate_message": is_duplicate_message,
+        "generate_image_bytes": generate_image_bytes,
     }
+    if PIL_AVAILABLE:
+        env["Image"] = Image
+        env["ImageDraw"] = ImageDraw
+        env["ImageFont"] = ImageFont
+        env["ImageOps"] = ImageOps
     exec(code_str, env)
 
-   # ==========================================
-# 3. AI BRAIN (CHATGPT MEMORY + ADMIN + SELF-HEAL)
-# ==========================================
-MASTER_SYSTEM_PROMPT = """You are 'Elyx Trading', a smart, friendly, ChatGPT-like AI companion and autonomous Discord Bot (discord.py v2.x).
-Talk naturally in Hinglish/Hindi (or English if spoken in English) like a real, witty friend—never use robotic or copy-paste replies.
 
-Analyze the message and pick ONE mode:
-1. "CHAT": Casual talk, questions, jokes, advice, or continuing past conversations using the user's Saved Memory.
-2. "ACTION": Authorized owner/admin wants an IMMEDIATE Discord server task right now (create/edit/delete channels or categories, create/assign/remove roles, set channel permissions for a mentioned user, kick/ban/timeout/mute a user, clear messages, send announcements).
-3. "FEATURE": Authorized owner/admin wants to permanently add a NEW reusable `-` prefix command (e.g., `-kick`, `-invites`, `-ping`) or background listener (welcome image/card, auto-mod, etc.).
-
-OUTPUT FORMAT (Strictly JSON ONLY, no markdown outside JSON):
-{
-  "mode": "CHAT" or "ACTION" or "FEATURE",
-  "reply": "Natural, friendly Hinglish response",
-  "memory_update": "Updated short bullet notes of important facts/plans about this user (keep old relevant facts + add new ones, max 400 chars)",
-  "code": "Raw Python code (empty string if mode is CHAT)"
-}
-
-PYTHON CODE RULES:
-- Never put ```python backticks inside the JSON `"code"` field.
-- Available globals: `bot`, `discord`, `commands`, `os`, `json`, `asyncio`, `invite_cache`, `DATA_DIR`, `ALLOWED_IDS`, `is_authorized`.
-- If `mode == "ACTION"`:
-  - `message` and `guild` (`message.guild`) are ALSO in scope!
-  - Define `async def run_action():` and put all async Discord calls inside it. Do NOT call `asyncio.run()`. The host will `await run_action()`.
-  - Use `message.mentions` (excluding `bot.user`) to get target members accurately.
-- If `mode == "FEATURE"`:
-  - Do NOT call `bot.run()`.
-  - Use `@bot.command(name="...")` (NO slash commands, ONLY `-` prefix commands!).
-  - If the command is a moderation/admin command (kick, ban, mute, timeout, clear, etc.), check `if not is_authorized(ctx.author): return await ctx.reply("❌ Permission nahi hai!")`.
-  - For events, use `@bot.listen("on_member_join")`, `@bot.listen("on_message")`, etc. (never `@bot.event`).
-  - Save persistent data as JSON inside `DATA_DIR`.
-"""
-
-
-async def call_gemini_keys(prompt: str) -> str:
-    last_err = None
-    for key in GEMINI_KEYS:
-        client = genai.Client(api_key=key)
-        for model_name in ("gemini-3-flash-preview", "gemini-3.8-flash"):
+async def reload_all_modules() -> int:
+    async with MODULE_LOCK:
+        unload_all_dynamic_modules()
+        modules = load_json(MODULES_FILE)
+        loaded = 0
+        for mod_id, info in modules.items():
+            if not info.get("enabled", True):
+                continue
+            code = info.get("code", "").strip()
+            if not code:
+                continue
             try:
-                resp = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        client.models.generate_content,
-                        model=model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=MASTER_SYSTEM_PROMPT,
-                            temperature=0.35,
-                            response_mime_type="application/json",
-                        ),
-                    ),
-                    timeout=30.0,
-                )
-                if resp.text:
-                    return resp.text
-            except Exception as e:
-                last_err = e
-    raise RuntimeError(f"Gemini keys failed: {last_err}")
-
-async def call_groq_backup(prompt: str) -> str:
-    if not GROQ_API_KEY:
-        raise RuntimeError("No GROQ_API_KEY set.")
-
-    groq_endpoint = "https://api.groq.com/openai/v1/chat/completions"
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "model": "openai/gpt-oss-120b",
-        "messages": [
-            {
-                "role": "system",
-                "content": MASTER_SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        "temperature": 0.35,
-        "response_format": {
-            "type": "json_object",
-        },
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            groq_endpoint,
-            headers=headers,
-            json=payload,
-            timeout=30,
-        ) as resp:
-
-            if resp.status != 200:
-                error_text = (await resp.text())[:500]
-                raise RuntimeError(
-                    f"Groq error {resp.status}: {error_text}"
-                )
-
-            data = await resp.json()
-
-            return data["choices"][0]["message"]["content"]
-
-
-async def ask_ai(prompt: str) -> dict:
-    raw = None
-    if GEMINI_KEYS:
-        try:
-            raw = await call_gemini_keys(prompt)
-        except Exception as e:
-            print(f"⚠️ Gemini fallback to Groq: {e}")
-
-    if not raw and GROQ_API_KEY:
-        try:
-            raw = await call_groq_backup(prompt)
-        except Exception as e:
-            print(f"⚠️ Groq AI failed: {e}")
-
-    if not raw:
-        raise RuntimeError("Koi bhi API key response nahi de rahi.")
-
-    cleaned = raw.strip()
-
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:]
-    elif cleaned.startswith("```"):
-        cleaned = cleaned[3:]
-
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3]
-
-        cleaned = cleaned.strip()
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(
-            f"AI ne valid JSON return nahi kiya: {e}\n"
-            f"Response: {cleaned[:1000]}"
-        )
-
-async def generate_with_self_heal(base_prompt: str, is_action: bool, action_env: dict = None) -> dict:
-    """Tests generated code and auto-fixes syntax/runtime bugs before finishing."""
-    ai_res = await ask_ai(base_prompt)
-    code = ai_res.get("code", "").strip()
-    if not code or ai_res.get("mode", "CHAT").upper() == "CHAT":
-        return ai_res
-
-    for attempt in range(2):
-        try:
-            compile(code, "<ai_feature>", "exec")
-            if is_action and action_env is not None:
-                exec(code, action_env)
-                if "run_action" in action_env:
-                    await action_env["run_action"]()
-            else:
                 execute_dynamic_code(code)
-            return ai_res
-        except Exception as err:
-            if attempt == 1:
-                raise err
-            fix_prompt = f"{base_prompt}\n\nPREVIOUS CODE FAILED WITH ERROR:\n{err}\n\nFix the bug and return valid JSON."
-            ai_res = await ask_ai(fix_prompt)
-            code = ai_res.get("code", "").strip()
-    return ai_res
+                loaded += 1
+            except Exception as e:
+                print(f"❌ Error loading {mod_id}: {e}")
+        return loaded
+
 # ==========================================
-# 4. BOT EVENTS & MENTION LISTENER
+# BLOCK 6: CONFIRM UI, CORE EVENTS & RUNNER
 # ==========================================
+class ConfirmActionView(discord.ui.View):
+    def __init__(self, author_id: int, ai_res: dict, orig_message: discord.Message):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.ai_res = ai_res
+        self.orig_message = orig_message
+        self.done = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id and not is_authorized(interaction.user):
+            await interaction.response.send_message(
+                "❌ Ye button sirf command dene wala ya Hard Access role hi daba sakta hai!",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm & Execute", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.done:
+            return
+        self.done = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="⏳ Executing action...", view=self)
+
+        mode = self.ai_res.get("mode")
+        code = self.ai_res.get("code", "").strip()
+        modules = load_json(MODULES_FILE)
+
+        try:
+            if mode == "ACTION":
+                env = {
+                    "bot": bot,
+                    "discord": discord,
+                    "commands": commands,
+                    "os": os,
+                    "re": re,
+                    "io": io,
+                    "json": json,
+                    "time": time,
+                    "asyncio": asyncio,
+                    "aiohttp": aiohttp,
+                    "message": self.orig_message,
+                    "guild": self.orig_message.guild,
+                    "ALLOWED_IDS": ALLOWED_IDS,
+                    "is_authorized": is_authorized,
+                }
+                exec(code, env)
+                if "run_action" in env:
+                    await env["run_action"]()
+                await interaction.followup.send("✅ **Server Action successfully execute ho gaya!**")
+
+            elif mode == "FEATURE_MODIFY":
+                fid = self.ai_res.get("target_feature_id", "")
+                if fid not in modules:
+                    await interaction.followup.send(f"❌ Feature `{fid}` nahi mila.")
+                    return
+                modules[fid]["code"] = code
+                modules[fid]["channel_scope"] = self.ai_res.get(
+                    "channel_scope", modules[fid].get("channel_scope", "ALL")
+                )
+                await save_modules(modules)
+                count = await reload_all_modules()
+                await interaction.followup.send(
+                    f"✅ Feature **`{fid}`** update aur reload ho gaya! (Active modules: {count})"
+                )
+
+            elif mode == "FEATURE_DELETE":
+                fid = self.ai_res.get("target_feature_id", "")
+                if fid in modules:
+                    del modules[fid]
+                    await save_modules(modules)
+                    count = await reload_all_modules()
+                    await interaction.followup.send(
+                        f"🗑️ Feature **`{fid}`** permanently delete ho gaya! (Active modules: {count})"
+                    )
+                else:
+                    await interaction.followup.send(f"❌ Feature `{fid}` pehle se nahi hai.")
+
+        except Exception as e:
+            err_trace = traceback.format_exc()[-1000:]
+            await interaction.followup.send(f"❌ **Execution Error:**\n```py\n{e}\n{err_trace}\n```")
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.done:
+            return
+        self.done = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="❌ Action cancel kar diya gaya.", view=self)
+
+
+@bot.command(name="features")
+async def list_features_cmd(ctx: commands.Context):
+    if not is_authorized(ctx.author):
+        return await ctx.reply("🔒 Permission nahi hai!")
+    modules = load_json(MODULES_FILE)
+    if not modules:
+        return await ctx.reply("📦 Abhi koi dynamic feature install nahi hai.")
+    lines = [
+        f"• **`{k}`** — {'🟢 ON' if v.get('enabled', True) else '🔴 OFF'} (Scope: `{v.get('channel_scope', 'ALL')}`)"
+        for k, v in modules.items()
+    ]
+    await ctx.reply("📦 **Installed Features:**\n" + "\n".join(lines))
+
+
+@bot.command(name="reload")
+async def reload_features_cmd(ctx: commands.Context):
+    if not is_authorized(ctx.author):
+        return await ctx.reply("🔒 Permission nahi hai!")
+    count = await reload_all_modules()
+    await ctx.reply(f"🔄 Saare dynamic modules reload ho gaye! (Active: **{count}**)")
+
+
+@bot.event
+async def on_invite_create(invite: discord.Invite):
+    if invite.guild:
+        try:
+            invite_cache[invite.guild.id] = await invite.guild.invites()
+        except Exception:
+            pass
+
+
+@bot.event
+async def on_invite_delete(invite: discord.Invite):
+    if invite.guild:
+        try:
+            invite_cache[invite.guild.id] = await invite.guild.invites()
+        except Exception:
+            pass
+
+
 @bot.event
 async def on_ready():
-    print(f"✅ ONLINE: {bot.user} (ID: {bot.user.id})")
-    print(f"🔑 Gemini Keys: {len(GEMINI_KEYS)} | Groq Backup: {'Yes' if GROQ_API_KEY else 'No'}")
-
+    print(f"🚀 Logged in as {bot.user} (ID: {bot.user.id})")
     for guild in bot.guilds:
         try:
             invite_cache[guild.id] = await guild.invites()
         except Exception:
-            pass
-
-    modules = load_json(MODULES_FILE)
-    loaded = 0
-    for mod_id, info in modules.items():
-        try:
-            execute_dynamic_code(info["code"])
-            loaded += 1
-        except Exception as e:
-            print(f"❌ Error loading {mod_id}: {e}")
-    print(f"📦 Loaded {loaded}/{len(modules)} saved custom modules.")
+            invite_cache[guild.id] = []
+    loaded = await reload_all_modules()
+    print(f"📦 Loaded {loaded} dynamic modules | Hard Access ID: {HARD_ACCESS_ID}")
 
 
 @bot.event
@@ -325,92 +461,126 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    direct_tags = (f"<@{bot.user.id}>", f"<@!{bot.user.id}>")
-    if any(tag in message.content for tag in direct_tags) and not message.mention_everyone:
-        clean_request = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
-        if not clean_request:
-            await message.reply("👋 Hanji bhai! Batao kya haal hai ya Discord mein kya kaam karna hai?")
-            return
-
-        async with message.channel.typing():
-            try:
-                modules = load_json(MODULES_FILE)
-                memories = load_json(MEMORY_FILE)
-                uid = str(message.author.id)
-                user_mem = memories.get(uid, "No past memory yet.")
-
-                mentions_info = [
-                    f"{m.display_name} (ID: {m.id})" for m in message.mentions if m.id != bot.user.id
-                ]
-                roles_info = [f"{r.name} (ID: {r.id})" for r in message.guild.roles if not r.is_default()][:25]
-                channels_info = [f"#{c.name} (ID: {c.id})" for c in message.guild.channels][:25]
-
-                prompt = f"""Server: {message.guild.name}
-Current Channel: #{message.channel.name} (ID: {message.channel.id})
-User: {message.author.display_name} (ID: {uid}, Authorized Hard-Access: {is_authorized(message.author)})
-User's Saved Memory: {user_mem}
-Mentioned Users: {mentions_info or 'None'}
-Existing Roles: {roles_info}
-Existing Channels: {channels_info}
-Installed Features: {list(modules.keys()) or 'None'}
-
-User Message:
-{clean_request}"""
-
-                ai_out = await ask_ai(prompt)
-                mode = ai_out.get("mode", "CHAT").upper()
-                reply_text = ai_out.get("reply", "Ho gaya bhai!")
-                new_mem = ai_out.get("memory_update", "").strip()
-                code = ai_out.get("code", "").strip()
-
-                if new_mem and new_mem != user_mem:
-                    memories[uid] = new_mem[:500]
-                    asyncio.create_task(save_memories(memories))
-
-                if mode == "CHAT" or not code:
-                    await message.reply(reply_text)
-                else:
-                    if not is_authorized(message.author):
-                        await message.reply("❌ Bhai ye hard-access kaam hai—isey sirf authorized role wale hi kar sakte hain!")
-                        return
-
-                    if mode == "ACTION":
-                        action_env = {
-                            "bot": bot,
-                            "discord": discord,
-                            "commands": commands,
-                            "os": os,
-                            "json": json,
-                            "asyncio": asyncio,
-                            "message": message,
-                            "guild": message.guild,
-                            "DATA_DIR": DATA_DIR,
-                        }
-                        final_out = await generate_with_self_heal(prompt, is_action=True, action_env=action_env)
-                        await message.reply(f"✅ {final_out.get('reply', reply_text)}")
-                    else:
-                        final_out = await generate_with_self_heal(prompt, is_action=False)
-                        final_code = final_out.get("code", code).strip()
-                        idx = 1
-                        while f"feature_{idx}" in modules:
-                            idx += 1
-                        feature_id = f"feature_{idx}"
-                        modules[feature_id] = {"request": clean_request, "code": final_code}
-                        await save_modules(modules)
-                        await message.reply(
-                            f"🚀 **Feature Ready (`{feature_id}`)!**\n{final_out.get('reply', reply_text)}\n*(GitHub par permanently save ho gaya hai!)*"
-                        )
-
-            except Exception as e:
-                print(traceback.format_exc())
-                await message.reply(f"❌ **Chhoti si dikkat aa gayi:** `{e}`\n*(Check kar lena ki bot ke paas Administrator role hai)*")
-
     await bot.process_commands(message)
 
+    is_mentioned = bot.user in message.mentions
+    is_reply_to_bot = (
+        message.reference
+        and message.reference.resolved
+        and getattr(message.reference.resolved, "author", None) == bot.user
+    )
+    if not (is_mentioned or is_reply_to_bot):
+        return
+
+    if is_duplicate_message(f"ai_core_{message.id}"):
+        return
+
+    clean_text = (
+        message.content.replace(f"<@{bot.user.id}>", "")
+        .replace(f"<@!{bot.user.id}>", "")
+        .strip()
+    )
+    if not clean_text:
+        return await message.reply("Bolo bhai, kya kaam hai? 👀")
+
+    memories = load_json(MEMORY_FILE)
+    modules = load_json(MODULES_FILE)
+    user_key = str(message.author.id)
+    user_mem = memories.get(user_key, "No previous memory.")
+
+    installed_summary = (
+        "\n".join(
+            [
+                f"- {k} (enabled={v.get('enabled', True)}, scope={v.get('channel_scope', 'ALL')})"
+                for k, v in modules.items()
+            ]
+        )
+        or "None"
+    )
+
+    context_prompt = (
+        f"User: {message.author} (ID: {message.author.id}, Authorized: {is_authorized(message.author)})\n"
+        f"Current Channel: #{message.channel.name} (ID: {message.channel.id})\n"
+        f"Saved Memory:\n{user_mem}\n\n"
+        f"Existing Installed Features:\n{installed_summary}\n\n"
+        f"User Message: {clean_text}"
+    )
+
+    async with message.channel.typing():
+        try:
+            ai_res = await ask_ai(context_prompt)
+            ai_res = await compile_and_heal_code(context_prompt, ai_res)
+        except Exception as e:
+            return await message.reply(f"⚠️ AI Error: `{e}`")
+
+    if ai_res.get("memory_update"):
+        memories[user_key] = ai_res["memory_update"][:400]
+        await save_memories(memories)
+
+    mode = ai_res.get("mode", "CHAT")
+    reply_text = ai_res.get("reply", "Done!")
+
+    if mode in ("ACTION", "FEATURE_CREATE", "FEATURE_MODIFY", "FEATURE_TOGGLE", "FEATURE_DELETE"):
+        if not is_authorized(message.author):
+            return await message.reply("🔒 Ye action sirf **Hard Access Role / Owner** hi kar sakta hai!")
+
+    if mode in ("CHAT", "CLARIFY"):
+        await message.reply(reply_text)
+
+    elif mode == "IMAGE":
+        img_prompt = ai_res.get("image_prompt") or clean_text
+        top_t = ai_res.get("meme_top", "")
+        bot_t = ai_res.get("meme_bottom", "")
+        try:
+            img_bytes = await generate_image_bytes(img_prompt, top_t, bot_t)
+            await message.reply(
+                content=reply_text, file=discord.File(img_bytes, filename="elyx_art.png")
+            )
+        except Exception as e:
+            await message.reply(f"❌ Image generate nahi ho payi: `{e}`")
+
+    elif mode == "FEATURE_CREATE":
+        fname = re.sub(
+            r"[^a-zA-Z0-9_]", "_", ai_res.get("feature_name", f"feat_{int(time.time())}")
+        ).lower()
+        modules[fname] = {
+            "enabled": True,
+            "channel_scope": str(ai_res.get("channel_scope", "ALL")),
+            "code": ai_res.get("code", "").strip(),
+        }
+        await save_modules(modules)
+        count = await reload_all_modules()
+        await message.reply(
+            f"{reply_text}\n\n✅ Feature **`{fname}`** install & reload ho gaya! (Total active: {count})"
+        )
+
+    elif mode == "FEATURE_TOGGLE":
+        fid = ai_res.get("target_feature_id", "")
+        if fid not in modules:
+            return await message.reply(f"❌ Feature `{fid}` nahi mila.")
+        state = bool(ai_res.get("enable", True))
+        modules[fid]["enabled"] = state
+        await save_modules(modules)
+        count = await reload_all_modules()
+        status_txt = "ON (Enabled) ✅" if state else "OFF (Disabled) ⏸️"
+        await message.reply(
+            f"{reply_text}\n\nFeature **`{fid}`** ab **{status_txt}** hai. (Active: {count})"
+        )
+
+    elif mode in ("ACTION", "FEATURE_MODIFY", "FEATURE_DELETE"):
+        summary = ai_res.get("action_summary", "Server/Feature update")
+
+
+        embed = discord.Embed(
+            title="⚡ Confirmation Required (5 Min)",
+            description=f"{reply_text}\n\n**Planned Changes:**\n{summary}",
+            color=discord.Color.gold(),
+        )
+        view = ConfirmActionView(message.author.id, ai_res, message)
+        await message.reply(embed=embed, view=view)
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
-        print("❌ ERROR: DISCORD_TOKEN missing hai!")
-    else:
-        bot.run(DISCORD_TOKEN)
-                
+        raise RuntimeError("❌ DISCORD_TOKEN missing in environment variables!")
+    bot.run(DISCORD_TOKEN)
+        

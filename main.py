@@ -198,7 +198,7 @@ async def call_groq_backup(prompt: str) -> str:
     }
 
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
         "messages": [
             {
                 "role": "system",
@@ -236,7 +236,6 @@ async def call_groq_backup(prompt: str) -> str:
 
 async def ask_ai(prompt: str) -> dict:
     raw = None
-
     if GEMINI_KEYS:
         try:
             raw = await call_gemini_keys(prompt)

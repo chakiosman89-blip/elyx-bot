@@ -308,6 +308,173 @@ async def reload_all_modules() -> int:
         return loaded
 
 # ==========================================
+# BLOCK 5: THINK-FIRST AI BRAIN & SELF-HEAL
+# ==========================================
+MASTER_SYSTEM_PROMPT = """You are 'Elyx Trading', an ultra-smart, Replit-grade autonomous Discord AI Developer & friendly companion (discord.py v2.x).
+Talk naturally in Hinglish/Hindi (or English if user speaks English) like a sharp, helpful friend.
+
+STEP 1 — DEEP INTENT ANALYSIS:
+- Trailing fillers like "ok", "thik hai", "samjha", "kar de", "bata" at the end of an instruction are NOT commands to reply "ok".
+- Check `Existing Installed Features` list carefully! If the user says "band kar", "stop", "disable", "hata de", "remove", "delete", "change kar", "modify kar", "fix kar" regarding an existing feature, use `FEATURE_TOGGLE`, `FEATURE_DELETE`, or `FEATURE_MODIFY` on the matching `target_feature_id`.
+- If the request is ambiguous (missing channel or unclear target), use mode `CLARIFY`.
+
+STEP 2 — PICK EXACTLY ONE MODE:
+1. "CHAT": Casual talk, questions, advice, or listing features.
+2. "IMAGE": Generate an image, logo, banner, or meme (`image_prompt`, optional `meme_top`, `meme_bottom`).
+3. "ACTION": Immediate Discord server change (create category + nested child channels, create/edit/delete roles with EXACT names, assign/remove roles, set permissions, kick/ban/timeout/mute, purge messages, embed announcement).
+4. "FEATURE_CREATE": Add a NEW permanent `-` prefix command or event listener.
+5. "FEATURE_MODIFY": Edit/fix an existing feature in `Existing Installed Features` (`target_feature_id`).
+6. "FEATURE_TOGGLE": Pause/stop (`enable`: false) or re-enable (`enable`: true) an existing feature.
+7. "FEATURE_DELETE": Permanently delete an existing feature (`target_feature_id`).
+8. "CLARIFY": Ask user for clarification without executing anything.
+
+OUTPUT FORMAT (Strictly valid JSON ONLY, no markdown outside JSON):
+{
+  "thought": "1-2 lines analyzing user's true intent",
+  "mode": "CHAT | IMAGE | ACTION | FEATURE_CREATE | FEATURE_MODIFY | FEATURE_TOGGLE | FEATURE_DELETE | CLARIFY",
+  "reply": "Natural, friendly Hinglish response",
+  "action_summary": "Clear bullet preview of exact changes (required for ACTION, FEATURE_MODIFY, FEATURE_DELETE)",
+  "target_feature_id": "Exact feature ID from Existing Installed Features (else empty)",
+  "feature_name": "Short snake_case name (for FEATURE_CREATE, else empty)",
+  "channel_scope": "Target channel ID as string or 'ALL'",
+  "enable": true,
+  "image_prompt": "Detailed English visual description if mode is IMAGE, else empty",
+  "meme_top": "Short funny top caption if meme, else empty",
+  "meme_bottom": "Short funny bottom caption if meme, else empty",
+  "memory_update": "Updated concise notes about user (max 400 chars)",
+  "code": "Raw Python code (ONLY for ACTION, FEATURE_CREATE, FEATURE_MODIFY; empty string otherwise)"
+}
+
+STRICT PYTHON CODE RULES:
+- Never put ```python backticks inside `"code"`.
+- Available globals: `bot`, `discord`, `commands`, `os`, `re`, `io`, `json`, `time`, `asyncio`, `aiohttp`, `invite_cache`, `DATA_DIR`, `ALLOWED_IDS`, `is_authorized`, `is_duplicate_message`, `generate_image_bytes`, `Image`, `ImageDraw`, `ImageFont`, `ImageOps`.
+- NEVER use `@bot.event`! Always use `@bot.listen("on_message")`, `@bot.listen("on_member_join")`, etc.
+- Inside ANY `@bot.listen("on_message")`:
+  1. Start with: `if message.author.bot or not message.guild: return` and `if is_duplicate_message(f"{feature_tag}_{message.id}"): return`
+  2. Ignore bot mentions: `if bot.user in message.mentions: return`
+  3. Enforce exact channel scope (`if message.channel.id != TARGET_CHANNEL_ID: return`) if specified.
+  4. Never reply "ok" unless explicitly requested as the exact reply text.
+- For nested Category + Channel in `ACTION`: find/create Category first, then pass `category=cat` to `create_text_channel`.
+- For Role creation in `ACTION`: preserve the EXACT role name requested by user.
+- For Welcome Card (`on_member_join`): fetch `member.display_avatar.with_size(256).url` with `aiohttp`, draw card with `PIL` showing avatar + `"Welcome {member.display_name}"`, and send `discord.File` (fallback to `discord.Embed` if image fetch fails).
+- If `mode == "ACTION"`: `message` and `guild` are in scope; define `async def run_action():` without `asyncio.run()`.
+- If `mode in ("FEATURE_CREATE", "FEATURE_MODIFY")`: do NOT call `bot.run()`; check `if not is_authorized(ctx.author): return await ctx.reply("❌ Permission nahi hai!")` for admin/mod commands.
+"""
+
+
+async def call_gemini_keys(prompt: str) -> str:
+    last_err = None
+    for key in GEMINI_KEYS:
+        client = genai.Client(api_key=key)
+        for model_name in ("gemini-2.5-flash", "gemini-2.0-flash"):
+            try:
+                resp = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=MASTER_SYSTEM_PROMPT,
+                            temperature=0.25,
+                            response_mime_type="application/json",
+                        ),
+                    ),
+                    timeout=35.0,
+                )
+                if resp.text:
+                    return resp.text
+            except Exception as e:
+                last_err = e
+    raise RuntimeError(f"Gemini keys failed: {last_err}")
+
+
+async def call_groq_backup(prompt: str) -> str:
+    if not GROQ_API_KEY:
+        raise RuntimeError("No GROQ_API_KEY set.")
+
+    groq_host = "api" + ".groq.com"
+    groq_endpoint = f"https://{groq_host}/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": MASTER_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.25,
+        "response_format": {"type": "json_object"},
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(groq_endpoint, headers=headers, json=payload, timeout=35) as resp:
+            if resp.status != 200:
+                error_text = (await resp.text())[:500]
+                raise RuntimeError(f"Groq error {resp.status}: {error_text}")
+            data = await resp.json()
+            first_choice = next(iter(data.get("choices", [])), {})
+            return first_choice.get("message", {}).get("content", "")
+
+
+async def ask_ai(prompt: str) -> dict:
+    raw = None
+    if GEMINI_KEYS:
+        try:
+            raw = await call_gemini_keys(prompt)
+        except Exception as e:
+            print(f"⚠️ Gemini fallback to Groq: {e}")
+
+    if not raw and GROQ_API_KEY:
+        try:
+            raw = await call_groq_backup(prompt)
+        except Exception as e:
+            print(f"⚠️ Groq AI failed: {e}")
+
+    if not raw:
+        raise RuntimeError("Koi bhi API key response nahi de rahi.")
+
+    cleaned = raw.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"AI ne valid JSON return nahi kiya: {e}\nResponse: {cleaned[:800]}")
+
+
+async def compile_and_heal_code(base_prompt: str, initial_ai_out: dict) -> dict:
+    ai_res = initial_ai_out
+    code = ai_res.get("code", "").strip()
+    if not code:
+        return ai_res
+
+    for attempt in range(2):
+        try:
+            compile(code, "<ai_feature>", "exec")
+            return ai_res
+        except Exception as err:
+            if attempt == 1:
+                raise err
+            fix_prompt = (
+                f"{base_prompt}\n\nPREVIOUS CODE HAD SYNTAX ERROR:\n{err}\n\n"
+                "Fix the syntax error and return valid JSON with the exact same mode."
+            )
+            ai_res = await ask_ai(fix_prompt)
+            code = ai_res.get("code", "").strip()
+            if not code:
+                return ai_res
+    return ai_res
+        
+
+# ==========================================
 # BLOCK 6: CONFIRM UI, CORE EVENTS & RUNNER
 # ==========================================
 class ConfirmActionView(discord.ui.View):

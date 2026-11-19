@@ -165,7 +165,7 @@ async def call_gemini_keys(prompt: str) -> str:
     last_err = None
     for key in GEMINI_KEYS:
         client = genai.Client(api_key=key)
-        for model_name in ("gemini-3-flash-preview", "gemini-2.5-flash"):
+        for model_name in ("gemini-3-flash-preview", "gemini-3.8-flash"):
             try:
                 resp = await asyncio.wait_for(
                     asyncio.to_thread(

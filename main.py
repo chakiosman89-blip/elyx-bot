@@ -186,43 +186,91 @@ async def call_gemini_keys(prompt: str) -> str:
                 last_err = e
     raise RuntimeError(f"Gemini keys failed: {last_err}")
 
-
 async def call_groq_backup(prompt: str) -> str:
     if not GROQ_API_KEY:
-        raise RuntimeError("No GROQ_API_KEY set.") 
-groq_endpoint = "https://groq.com" + "/v1/chat/completions"
-headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-payload = {
+        raise RuntimeError("No GROQ_API_KEY set.")
+
+    groq_endpoint = "https://api.groq.com/openai/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": MASTER_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
+            {
+                "role": "system",
+                "content": MASTER_SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
         ],
         "temperature": 0.35,
-        "response_format": {"type": "json_object"},
+        "response_format": {
+            "type": "json_object",
+        },
     }
+
     async with aiohttp.ClientSession() as session:
-        async with session.post(groq_endpoint, headers=headers, json=payload, timeout=30) as resp:
+        async with session.post(
+            groq_endpoint,
+            headers=headers,
+            json=payload,
+            timeout=30,
+        ) as resp:
+
             if resp.status != 200:
-                raise RuntimeError(f"Groq error {resp.status}: {(await resp.text())[:150]}")
+                error_text = (await resp.text())[:500]
+                raise RuntimeError(
+                    f"Groq error {resp.status}: {error_text}"
+                )
+
             data = await resp.json()
+
             return data["choices"][0]["message"]["content"]
 
 
 async def ask_ai(prompt: str) -> dict:
     raw = None
+
     if GEMINI_KEYS:
         try:
             raw = await call_gemini_keys(prompt)
         except Exception as e:
             print(f"⚠️ Gemini fallback to Groq: {e}")
+
     if not raw and GROQ_API_KEY:
-        raw = await call_groq_backup(prompt)
+        try:
+            raw = await call_groq_backup(prompt)
+        except Exception as e:
+            print(f"⚠️ Groq AI failed: {e}")
+
     if not raw:
         raise RuntimeError("Koi bhi API key response nahi de rahi.")
-    cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-    return json.loads(cleaned)
 
+    cleaned = raw.strip()
+
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+
+        cleaned = cleaned.strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"AI ne valid JSON return nahi kiya: {e}\n"
+            f"Response: {cleaned[:1000]}"
+        )
 
 async def generate_with_self_heal(base_prompt: str, is_action: bool, action_env: dict = None) -> dict:
     """Tests generated code and auto-fixes syntax/runtime bugs before finishing."""

@@ -3659,8 +3659,7 @@ async def execute_server_action(guild, action):
     # RENAME ROLE
     # ----------------------------------------
 
-
-if action_type == "rename_role":
+    if action_type == "rename_role":
 
         role = find_role_exact(
             guild,
@@ -3688,7 +3687,7 @@ if action_type == "rename_role":
             "message": f"Role renamed: {old_name} → {role.name}"
         }
 
-                raise ValueError("Unsupported Discord action.")
+    raise ValueError("Unsupported Discord action.")
 
 class ServerActionApprovalView(discord.ui.View):
     def __init__(self, action_id):

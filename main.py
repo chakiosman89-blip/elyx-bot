@@ -116,7 +116,7 @@ Write the complete Python code to implement this feature on `bot`."""
 
     response = await asyncio.to_thread(
         ai_client.models.generate_content,
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash"",
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,

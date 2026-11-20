@@ -307,35 +307,40 @@ async def reload_all_modules() -> int:
                 print(f"❌ Error loading {mod_id}: {e}")
         return loaded
 
+        
 # ==========================================
 # BLOCK 5: THINK-FIRST AI BRAIN & SELF-HEAL
 # ==========================================
-MASTER_SYSTEM_PROMPT = """You are 'Elyx Trading', an ultra-smart, Replit-grade autonomous Discord AI Developer & friendly companion (discord.py v2.x).
+MASTER_SYSTEM_PROMPT = """You are 'Elyx Trading', an ultra-smart, autonomous Discord AI Developer & friendly companion (discord.py v2.x).
 Talk naturally in Hinglish/Hindi (or English if user speaks English) like a sharp, helpful friend.
 
-STEP 1 — DEEP INTENT ANALYSIS:
-- Trailing fillers like "ok", "thik hai", "samjha", "kar de", "bata" at the end of an instruction are NOT commands to reply "ok".
-- Check `Existing Installed Features` list carefully! If the user says "band kar", "stop", "disable", "hata de", "remove", "delete", "change kar", "modify kar", "fix kar" regarding an existing feature, use `FEATURE_TOGGLE`, `FEATURE_DELETE`, or `FEATURE_MODIFY` on the matching `target_feature_id`.
-- If the request is ambiguous (missing channel or unclear target), use mode `CLARIFY`.
+STEP 1 — STRICT INTENT ROUTING (ACTION vs FEATURE vs SELF-HEAL):
+- One-time tasks ("channel bana de", "role bana de", "meme channel mein meme daal", "announcement bhej", "kick/ban/mute kar", "messages delete kar") are ALWAYS `ACTION`, NEVER `FEATURE_CREATE`! Do NOT create a permanent feature unless user explicitly asks for a recurring command/system/automation (e.g., "command bana de", "invite count leaderboard bana de", "auto welcome laga de", "feature bana de").
+- SELF-HEALING ON REPLY: Look carefully at `Replied Message Context`! If the user replies to an error message (or previous bot output) saying "fix kar", "theek kar", "solve kar", "ye error fix kar":
+  - Read the exact error/traceback from `Replied Message Context` AND check `Existing Installed Features (with Code)`.
+  - If the error belongs to an installed feature, return `mode`: `"FEATURE_MODIFY"` with `target_feature_id` set to that exact feature's ID and `"code"` containing the complete fixed Python code.
+  - If the error came from a one-time `ACTION` (like `run_action` or `generate_image_bytes`), return `mode`: `"ACTION"` with `"code"` containing the fixed `async def run_action():` so the user can confirm and run it immediately.
+- Check `Existing Installed Features` if user says "band kar", "stop", "disable", "hata de", "remove", "delete", "change kar", "modify kar".
+- If channel/target is missing or unclear, use `CLARIFY`.
 
 STEP 2 — PICK EXACTLY ONE MODE:
 1. "CHAT": Casual talk, questions, advice, or listing features.
-2. "IMAGE": Generate an image, logo, banner, or meme (`image_prompt`, optional `meme_top`, `meme_bottom`).
-3. "ACTION": Immediate Discord server change (create category + nested child channels, create/edit/delete roles with EXACT names, assign/remove roles, set permissions, kick/ban/timeout/mute, purge messages, embed announcement).
-4. "FEATURE_CREATE": Add a NEW permanent `-` prefix command or event listener.
-5. "FEATURE_MODIFY": Edit/fix an existing feature in `Existing Installed Features` (`target_feature_id`).
+2. "IMAGE": Generate an image/meme in the CURRENT channel (`image_prompt`, optional `meme_top`, `meme_bottom`). (If user asks to send an image/meme to ANOTHER specific channel like #memes, use `ACTION` instead!).
+3. "ACTION": Any one-time Discord task (create/delete channels or categories, create/assign roles, send message/embed/meme to another channel, moderation). Requires Confirm button.
+4. "FEATURE_CREATE": Add a NEW permanent `-` prefix command or event listener (`on_member_join`, `on_message`, etc.).
+5. "FEATURE_MODIFY": Fix or edit an existing feature in `Existing Installed Features` (`target_feature_id`).
 6. "FEATURE_TOGGLE": Pause/stop (`enable`: false) or re-enable (`enable`: true) an existing feature.
 7. "FEATURE_DELETE": Permanently delete an existing feature (`target_feature_id`).
-8. "CLARIFY": Ask user for clarification without executing anything.
+8. "CLARIFY": Ask user for missing details without executing anything.
 
 OUTPUT FORMAT (Strictly valid JSON ONLY, no markdown outside JSON):
 {
-  "thought": "1-2 lines analyzing user's true intent",
+  "thought": "1-2 lines analyzing user's true intent & any replied error",
   "mode": "CHAT | IMAGE | ACTION | FEATURE_CREATE | FEATURE_MODIFY | FEATURE_TOGGLE | FEATURE_DELETE | CLARIFY",
   "reply": "Natural, friendly Hinglish response",
   "action_summary": "Clear bullet preview of exact changes (required for ACTION, FEATURE_MODIFY, FEATURE_DELETE)",
   "target_feature_id": "Exact feature ID from Existing Installed Features (else empty)",
-  "feature_name": "Short snake_case name (for FEATURE_CREATE, else empty)",
+  "feature_name": "Short snake_case name (ONLY for FEATURE_CREATE, else empty)",
   "channel_scope": "Target channel ID as string or 'ALL'",
   "enable": true,
   "image_prompt": "Detailed English visual description if mode is IMAGE, else empty",
@@ -347,18 +352,19 @@ OUTPUT FORMAT (Strictly valid JSON ONLY, no markdown outside JSON):
 
 STRICT PYTHON CODE RULES:
 - Never put ```python backticks inside `"code"`.
-- Available globals: `bot`, `discord`, `commands`, `os`, `re`, `io`, `json`, `time`, `asyncio`, `aiohttp`, `invite_cache`, `DATA_DIR`, `ALLOWED_IDS`, `is_authorized`, `is_duplicate_message`, `generate_image_bytes`, `Image`, `ImageDraw`, `ImageFont`, `ImageOps`.
-- NEVER use `@bot.event`! Always use `@bot.listen("on_message")`, `@bot.listen("on_member_join")`, etc.
+- Available globals in BOTH `ACTION` and `FEATURE`: `bot`, `discord`, `commands`, `os`, `re`, `io`, `json`, `time`, `asyncio`, `aiohttp`, `invite_cache`, `DATA_DIR`, `ALLOWED_IDS`, `is_authorized`, `is_duplicate_message`, `generate_image_bytes`, `Image`, `ImageDraw`, `ImageFont`, `ImageOps`.
+- In `ACTION` mode: `message` and `guild` are also in scope. You MUST define `async def run_action():` and put all logic inside it (never call `asyncio.run()`).
+  - Example sending meme to a channel in `ACTION`:
+    async def run_action():
+        ch = discord.utils.get(guild.text_channels, name="memes") or message.channel
+        img_io = await generate_image_bytes("funny crypto trader meme", "ME BUYING THE DIP", "IT KEPT DIPPING")
+        await ch.send(file=discord.File(img_io, filename="meme.png"))
+- NEVER use `@bot.event` in features! Always use `@bot.listen("on_message")`, `@bot.listen("on_member_join")`, etc.
 - Inside ANY `@bot.listen("on_message")`:
   1. Start with: `if message.author.bot or not message.guild: return` and `if is_duplicate_message(f"{feature_tag}_{message.id}"): return`
   2. Ignore bot mentions: `if bot.user in message.mentions: return`
   3. Enforce exact channel scope (`if message.channel.id != TARGET_CHANNEL_ID: return`) if specified.
-  4. Never reply "ok" unless explicitly requested as the exact reply text.
-- For nested Category + Channel in `ACTION`: find/create Category first, then pass `category=cat` to `create_text_channel`.
-- For Role creation in `ACTION`: preserve the EXACT role name requested by user.
-- For Welcome Card (`on_member_join`): fetch `member.display_avatar.with_size(256).url` with `aiohttp`, draw card with `PIL` showing avatar + `"Welcome {member.display_name}"`, and send `discord.File` (fallback to `discord.Embed` if image fetch fails).
-- If `mode == "ACTION"`: `message` and `guild` are in scope; define `async def run_action():` without `asyncio.run()`.
-- If `mode in ("FEATURE_CREATE", "FEATURE_MODIFY")`: do NOT call `bot.run()`; check `if not is_authorized(ctx.author): return await ctx.reply("❌ Permission nahi hai!")` for admin/mod commands.
+- Do NOT call `bot.run()` anywhere in generated code.
 """
 
 
@@ -375,7 +381,7 @@ async def call_gemini_keys(prompt: str) -> str:
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             system_instruction=MASTER_SYSTEM_PROMPT,
-                            temperature=0.25,
+                            temperature=0.2,
                             response_mime_type="application/json",
                         ),
                     ),
@@ -404,7 +410,7 @@ async def call_groq_backup(prompt: str) -> str:
             {"role": "system", "content": MASTER_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.25,
+        "temperature": 0.2,
         "response_format": {"type": "json_object"},
     }
 
@@ -472,11 +478,14 @@ async def compile_and_heal_code(base_prompt: str, initial_ai_out: dict) -> dict:
             if not code:
                 return ai_res
     return ai_res
-        
+                    
 
 # ==========================================
-# BLOCK 6: CONFIRM UI, CORE EVENTS & RUNNER
+# BLOCK 6: CONFIRM UI, SELF-HEAL & RUNNER
 # ==========================================
+LAST_RUNTIME_ERROR = ""
+
+
 class ConfirmActionView(discord.ui.View):
     def __init__(self, author_id: int, ai_res: dict, orig_message: discord.Message):
         super().__init__(timeout=300)
@@ -496,6 +505,7 @@ class ConfirmActionView(discord.ui.View):
 
     @discord.ui.button(label="Confirm & Execute", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global LAST_RUNTIME_ERROR
         if self.done:
             return
         self.done = True
@@ -522,9 +532,19 @@ class ConfirmActionView(discord.ui.View):
                     "aiohttp": aiohttp,
                     "message": self.orig_message,
                     "guild": self.orig_message.guild,
+                    "invite_cache": invite_cache,
+                    "DATA_DIR": DATA_DIR,
                     "ALLOWED_IDS": ALLOWED_IDS,
                     "is_authorized": is_authorized,
+                    "is_duplicate_message": is_duplicate_message,
+                    "generate_image_bytes": generate_image_bytes,
                 }
+                if PIL_AVAILABLE:
+                    env["Image"] = Image
+                    env["ImageDraw"] = ImageDraw
+                    env["ImageFont"] = ImageFont
+                    env["ImageOps"] = ImageOps
+
                 exec(code, env)
                 if "run_action" in env:
                     await env["run_action"]()
@@ -558,8 +578,12 @@ class ConfirmActionView(discord.ui.View):
                     await interaction.followup.send(f"❌ Feature `{fid}` pehle se nahi hai.")
 
         except Exception as e:
-            err_trace = traceback.format_exc()[-1000:]
-            await interaction.followup.send(f"❌ **Execution Error:**\n```py\n{e}\n{err_trace}\n```")
+            err_trace = traceback.format_exc()[-1200:]
+            LAST_RUNTIME_ERROR = f"Mode: {mode}\nError: {e}\nTraceback:\n{err_trace}"
+            await interaction.followup.send(
+                f"❌ **Execution Error:**\n```py\n{e}\n{err_trace}\n```\n"
+                "💡 *Is message par Reply karke likho **'isko fix kar'** — main khud theek kar dunga!*"
+            )
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
     async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -569,8 +593,7 @@ class ConfirmActionView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(content="❌ Action cancel kar diya gaya.", view=self)
-
-
+                
 @bot.command(name="features")
 async def list_features_cmd(ctx: commands.Context):
     if not is_authorized(ctx.author):
@@ -594,6 +617,20 @@ async def reload_features_cmd(ctx: commands.Context):
 
 
 @bot.event
+async def on_command_error(ctx: commands.Context, error):
+    global LAST_RUNTIME_ERROR
+    if isinstance(error, commands.CommandNotFound):
+        return
+    orig = getattr(error, "original", error)
+    err_trace = "".join(traceback.format_exception(type(orig), orig, orig.__traceback__))[-1200:]
+    LAST_RUNTIME_ERROR = f"Command: {ctx.message.content}\nError: {orig}\nTraceback:\n{err_trace}"
+    await ctx.reply(
+        f"❌ **Command Error:**\n```py\n{orig}\n{err_trace}\n```\n"
+        "💡 *Is message par Reply karke likho **'fix kar'** — main is command ko khud fix kar dunga!*"
+    )
+
+
+@bot.event
 async def on_invite_create(invite: discord.Invite):
     if invite.guild:
         try:
@@ -612,6 +649,12 @@ async def on_invite_delete(invite: discord.Invite):
 
 
 @bot.event
+async def setup_hook():
+    if os.path.exists("casino_engine.py"):
+        await bot.load_extension("casino_engine")
+
+
+@bot.event
 async def on_ready():
     print(f"🚀 Logged in as {bot.user} (ID: {bot.user.id})")
     for guild in bot.guilds:
@@ -625,17 +668,23 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
+    global LAST_RUNTIME_ERROR
     if message.author.bot or not message.guild:
         return
 
     await bot.process_commands(message)
 
     is_mentioned = bot.user in message.mentions
-    is_reply_to_bot = (
-        message.reference
-        and message.reference.resolved
-        and getattr(message.reference.resolved, "author", None) == bot.user
-    )
+    replied_msg = None
+    if message.reference and message.reference.message_id:
+        replied_msg = message.reference.resolved
+        if not isinstance(replied_msg, discord.Message):
+            try:
+                replied_msg = await message.channel.fetch_message(message.reference.message_id)
+            except Exception:
+                replied_msg = None
+
+    is_reply_to_bot = bool(replied_msg and replied_msg.author == bot.user)
     if not (is_mentioned or is_reply_to_bot):
         return
 
@@ -650,24 +699,46 @@ async def on_message(message: discord.Message):
     if not clean_text:
         return await message.reply("Bolo bhai, kya kaam hai? 👀")
 
+    replied_context = "None"
+    if replied_msg:
+        parts = []
+        if replied_msg.content:
+            parts.append(replied_msg.content)
+        for emb in replied_msg.embeds:
+            if emb.title:
+                parts.append(f"[Embed Title]: {emb.title}")
+            if emb.description:
+                parts.append(f"[Embed Desc]: {emb.description}")
+        if parts:
+            replied_context = "\n".join(parts)[:2000]
+    elif LAST_RUNTIME_ERROR and any(
+        w in clean_text.lower() for w in ("fix", "error", "theek", "solve")
+    ):
+        replied_context = LAST_RUNTIME_ERROR[:2000]
+
     memories = load_json(MEMORY_FILE)
     modules = load_json(MODULES_FILE)
     user_key = str(message.author.id)
     user_mem = memories.get(user_key, "No previous memory.")
 
-    installed_summary = (
-        "\n".join(
-            [
-                f"- {k} (enabled={v.get('enabled', True)}, scope={v.get('channel_scope', 'ALL')})"
-                for k, v in modules.items()
-            ]
-        )
-        or "None"
+    is_fix_request = any(
+        w in clean_text.lower() for w in ("fix", "error", "theek", "solve", "modify", "change")
     )
+    if modules:
+        feat_lines = []
+        for k, v in modules.items():
+            line = f"- {k} (enabled={v.get('enabled', True)}, scope={v.get('channel_scope', 'ALL')})"
+            if is_fix_request:
+                line += f"\n  CODE:\n{v.get('code', '')[:2500]}"
+            feat_lines.append(line)
+        installed_summary = "\n".join(feat_lines)
+    else:
+        installed_summary = "None"
 
     context_prompt = (
         f"User: {message.author} (ID: {message.author.id}, Authorized: {is_authorized(message.author)})\n"
         f"Current Channel: #{message.channel.name} (ID: {message.channel.id})\n"
+        f"Replied Message Context:\n{replied_context}\n\n"
         f"Saved Memory:\n{user_mem}\n\n"
         f"Existing Installed Features:\n{installed_summary}\n\n"
         f"User Message: {clean_text}"
@@ -724,7 +795,7 @@ async def on_message(message: discord.Message):
     elif mode == "FEATURE_TOGGLE":
         fid = ai_res.get("target_feature_id", "")
         if fid not in modules:
-            return await message.reply(f"❌ Feature `{fid}` nahi mila.")
+            return await ctx.reply(f"❌ Feature `{fid}` nahi mila.")
         state = bool(ai_res.get("enable", True))
         modules[fid]["enabled"] = state
         await save_modules(modules)
@@ -734,10 +805,20 @@ async def on_message(message: discord.Message):
             f"{reply_text}\n\nFeature **`{fid}`** ab **{status_txt}** hai. (Active: {count})"
         )
 
+    elif mode == "FEATURE_MODIFY" and is_fix_request:
+        fid = ai_res.get("target_feature_id", "")
+        if fid not in modules:
+            return await message.reply(f"❌ Feature `{fid}` nahi mila.")
+        modules[fid]["code"] = ai_res.get("code", "").strip()
+        await save_modules(modules)
+        count = await reload_all_modules()
+        LAST_RUNTIME_ERROR = ""
+        await message.reply(
+            f"{reply_text}\n\n🛠️ **Self-Heal Applied!** Feature **`{fid}`** khud fix aur reload ho gaya! (Active: {count})"
+        )
+
     elif mode in ("ACTION", "FEATURE_MODIFY", "FEATURE_DELETE"):
         summary = ai_res.get("action_summary", "Server/Feature update")
-
-
         embed = discord.Embed(
             title="⚡ Confirmation Required (5 Min)",
             description=f"{reply_text}\n\n**Planned Changes:**\n{summary}",
@@ -746,8 +827,11 @@ async def on_message(message: discord.Message):
         view = ConfirmActionView(message.author.id, ai_res, message)
         await message.reply(embed=embed, view=view)
 
+
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("❌ DISCORD_TOKEN missing in environment variables!")
     bot.run(DISCORD_TOKEN)
-        
+                  
+    
+    

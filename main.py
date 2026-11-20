@@ -746,6 +746,10 @@ async def on_message(message: discord.Message):
         view = ConfirmActionView(message.author.id, ai_res, message)
         await message.reply(embed=embed, view=view)
 
+@bot.event
+async def setup_hook():
+  await bot.load_extension("casino_engine")
+
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("❌ DISCORD_TOKEN missing in environment variables!")

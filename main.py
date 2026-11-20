@@ -827,6 +827,152 @@ async def on_message(message: discord.Message):
         view = ConfirmActionView(message.author.id, ai_res, message)
         await message.reply(embed=embed, view=view)
 
+# ==========================================
+# BLOCK 7: 2-SEC SPEED PATCH + CORE SELF-EDIT
+# ==========================================
+async def _fast_gemini_keys(prompt: str) -> str:
+    last_err = None
+    for key in GEMINI_KEYS:
+        client = genai.Client(api_key=key)
+        for model_name in ("gemini-2.5-flash", "gemini-2.0-flash"):
+            try:
+                resp = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=MASTER_SYSTEM_PROMPT,
+                            temperature=0.2,
+                            response_mime_type="application/json",
+                        ),
+                    ),
+                    timeout=8.0,
+                )
+                if resp.text:
+                    return resp.text
+            except Exception as e:
+                last_err = e
+    raise RuntimeError(f"Gemini keys failed: {last_err}")
+
+
+async def _fast_groq_backup(prompt: str) -> str:
+    if not GROQ_API_KEY:
+        raise RuntimeError("No GROQ_API_KEY set.")
+    groq_host = "api" + ".groq.com"
+    groq_endpoint = f"https://{groq_host}/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": MASTER_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(groq_endpoint, headers=headers, json=payload, timeout=8) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"Groq error {resp.status}: {(await resp.text())[:300]}")
+            data = await resp.json()
+            return next(iter(data.get("choices", [])), {}).get("message", {}).get("content", "")
+
+
+async def _super_fast_ask_ai(prompt: str) -> dict:
+    raw = None
+    if GROQ_API_KEY:
+        try:
+            raw = await _fast_groq_backup(prompt)
+        except Exception as e:
+            print(f"⚠️ Groq fallback to Gemini: {e}")
+    if not raw and GEMINI_KEYS:
+        try:
+            raw = await _fast_gemini_keys(prompt)
+        except Exception as e:
+            print(f"⚠️ Gemini failed: {e}")
+    if not raw:
+        raise RuntimeError("Koi bhi API key response nahi de rahi.")
+
+    cleaned = raw.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return json.loads(cleaned.strip())
+
+
+# Override slow AI functions with 2-sec fast versions
+call_gemini_keys = _fast_gemini_keys
+call_groq_backup = _fast_groq_backup
+ask_ai = _super_fast_ask_ai
+
+
+async def patch_core_file_on_github(file_path: str, instruction: str) -> str:
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        raise RuntimeError("GITHUB_TOKEN missing in environment!")
+    gh_host = "api" + ".github.com"
+    api_url = f"https://{gh_host}/repos/{GITHUB_REPO}/contents/{file_path}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{api_url}?ref={GITHUB_BRANCH}", headers=headers) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"GitHub read error ({resp.status})")
+            data = await resp.json()
+            sha = data["sha"]
+            current_code = base64.b64decode(data["content"]).decode("utf-8")
+
+        patch_prompt = (
+            f"You are editing `{file_path}` for a discord.py bot. Apply ONLY this exact change without breaking anything else:\n"
+            f"INSTRUCTION: {instruction}\n\n"
+            f"CURRENT FILE CONTENT:\n{current_code}\n\n"
+            "Return valid JSON ONLY with keys: {\"reply\": \"short Hinglish explanation of fix\", \"code\": \"COMPLETE UPDATED PYTHON FILE CONTENT\"}"
+        )
+        res = await ask_ai(patch_prompt)
+        new_code = res.get("code", "").strip()
+        if not new_code or len(new_code) < 100:
+            raise RuntimeError("AI ne valid full file code generate nahi kiya.")
+
+        compile(new_code, file_path, "exec")  # Syntax check before pushing
+
+        encoded = base64.b64encode(new_code.encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": f"AI Core Self-Patch: {file_path}",
+            "content": encoded,
+            "branch": GITHUB_BRANCH,
+            "sha": sha,
+        }
+        async with session.put(api_url, headers=headers, json=payload) as put_resp:
+            if put_resp.status not in (200, 201):
+                raise RuntimeError(f"GitHub commit failed ({put_resp.status})")
+        return res.get("reply", f"✅ {file_path} successfully patched & pushed!")
+
+
+@bot.command(name="corefix")
+async def corefix_cmd(ctx: commands.Context, file_name: str, *, instruction: str):
+    """Usage: -corefix main.py <kya fix karna hai> OR -corefix casino_engine.py <kya fix karna hai>"""
+    if not is_authorized(ctx.author):
+        return await ctx.reply("🔒 Ye command sirf Owner / Hard Access Role ke liye hai!")
+    if file_name not in ("main.py", "casino_engine.py"):
+        return await ctx.reply("❌ Sirf `main.py` ya `casino_engine.py` hi edit kar sakte ho!")
+
+    msg = await ctx.reply(f"🛠️ **`{file_name}`** ko GitHub par read aur patch kar raha hoon...")
+    try:
+        summary = await patch_core_file_on_github(file_name, instruction)
+        await msg.edit(
+            content=f"✅ **`{file_name}` Patch Done & Pushed to GitHub!**\n{summary}\n🔄 *Hosting runtime ab auto-restart hoga...*"
+        )
+    except Exception as e:
+        await msg.edit(content=f"❌ **Core Patch Error:** `{e}`")
+        
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN:

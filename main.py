@@ -366,7 +366,7 @@ async def call_gemini_keys(prompt: str) -> str:
     last_err = None
     for key in GEMINI_KEYS:
         client = genai.Client(api_key=key)
-        for model_name in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        for model_name in ("gemini-3.8-flash", "gemini-3.5-flash-lite"):
             try:
                 resp = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -399,7 +399,7 @@ async def call_groq_backup(prompt: str) -> str:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
         "messages": [
             {"role": "system", "content": MASTER_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},

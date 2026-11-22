@@ -449,6 +449,8 @@ class ElyxPanelCog(commands.Cog):
         await ctx.reply(embed=embed, view=HomeLauncherView())
 
 
+
 async def setup(bot: commands.Bot):
+    bot.remove_command("panel")
     await bot.add_cog(ElyxPanelCog(bot))
-      
+    

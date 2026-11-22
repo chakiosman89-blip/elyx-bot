@@ -2,13 +2,15 @@ import os
 import re
 import json
 import base64
+import logging
 import importlib
+from collections import deque
 import aiohttp
 import discord
 from discord.ext import commands
 
 # ==========================================
-# PART 1: SAFE REPO & FADEHOST MCP ENGINE
+# PART 1: LIVE CONSOLE & GITHUB ENGINE
 # ==========================================
 HARD_ACCESS_ID = 1572448688700391454
 ALLOWED_IDS = {HARD_ACCESS_ID}
@@ -16,21 +18,27 @@ for _item in os.getenv("OWNER_ID", str(HARD_ACCESS_ID)).split(","):
     if _item.strip().isdigit():
         ALLOWED_IDS.add(int(_item.strip()))
 
-DEFAULT_REPO = "chakiosman89-blip/elyx-bot"
-
-
-def get_clean_repo() -> str:
-    return "chakiosman89-blip/elyx-bot"
-    
-
-
+REPO_OWNER_AND_NAME = "chakiosman89-blip/elyx-bot"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip() or "main"
-FADEHOST_API_KEY = os.getenv("FADEHOST_API_KEY", "").strip()
-FADEHOST_MCP_URL = "https://fadehost.com"
 
 GITHUB_ICON = "https://githubassets.com"
 FADEHOST_ICON = "https://google.com"
+
+CONSOLE_ERRORS = deque(maxlen=30)
+
+
+class ErrorBufferHandler(logging.Handler):
+    def emit(self, record):
+        if record.levelno >= logging.ERROR:
+            CONSOLE_ERRORS.append(self.format(record))
+
+
+_root_logger = logging.getLogger()
+if not any(isinstance(h, ErrorBufferHandler) for h in _root_logger.handlers):
+    _h = ErrorBufferHandler()
+    _h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s", "%H:%M:%S"))
+    _root_logger.addHandler(_h)
 
 
 def is_owner(user: discord.abc.User) -> bool:
@@ -43,67 +51,10 @@ def is_owner(user: discord.abc.User) -> bool:
     return False
 
 
-async def fadehost_mcp_call(tool_name: str, arguments: dict = None) -> str:
-    if not FADEHOST_API_KEY:
-        raise RuntimeError("FADEHOST_API_KEY missing hai! FadeHost Variables mein add karein.")
-    headers = {
-        "Authorization": f"Bearer {FADEHOST_API_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-    }
-    async with aiohttp.ClientSession() as session:
-        init_payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "elyx-bot", "version": "1.0"},
-            },
-        }
-        async with session.post(FADEHOST_MCP_URL, headers=headers, json=init_payload, timeout=15) as init_resp:
-            sid = init_resp.headers.get("Mcp-Session-Id") or init_resp.headers.get("mcp-session-id")
-            if sid:
-                headers["Mcp-Session-Id"] = sid
-
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments or {}},
-        }
-        async with session.post(FADEHOST_MCP_URL, headers=headers, json=payload, timeout=20) as resp:
-            raw = await resp.text()
-            if resp.status != 200:
-                raise RuntimeError(f"FadeHost HTTP {resp.status}: {raw[:250]}")
-            for line in raw.splitlines():
-                if line.startswith("data: "):
-                    raw = line[6:]
-                    break
-            data = json.loads(raw)
-            if "error" in data:
-                raise RuntimeError(data["error"].get("message", str(data["error"])))
-            parts = data.get("result", {}).get("content", [])
-            return "\n".join([c.get("text", "") for c in parts if c.get("type") == "text"])
-
-
-async def get_fadehost_bot_id() -> str:
-    env_id = os.getenv("FADEHOST_SERVER_ID", "").strip()
-    if env_id:
-        return env_id
-    bots_text = await fadehost_mcp_call("list_bots", {})
-    match = re.search(r"(bot_[a-zA-Z0-9_-]+)", bots_text)
-    if match:
-        return match.group(1)
-    raise RuntimeError(f"Bot ID auto-detect nahi ho payi: {bots_text[:180]}")
-
-
 async def gh_request(method: str, path: str, payload: dict = None):
     if not GITHUB_TOKEN:
         raise RuntimeError("GITHUB_TOKEN missing hai!")
-    repo = get_clean_repo()
-    url = f"https://github.com{repo}/{path.lstrip('/')}"
+    url = f"https://github.com{REPO_OWNER_AND_NAME}/{path.lstrip('/')}"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
@@ -115,7 +66,7 @@ async def gh_request(method: str, path: str, payload: dict = None):
 
 
 # ==========================================
-# PART 2: GITHUB SMART CODER & CLEANER
+# PART 2: GITHUB CODER & LIVE SYNC ENGINE
 # ==========================================
 async def gh_write_smart_code(file_path: str, instruction: str) -> str:
     clean_path = file_path.strip().lstrip("/")
@@ -139,8 +90,7 @@ async def gh_write_smart_code(file_path: str, instruction: str) -> str:
         f"Write ultra-clean, compact, storage-saving discord.py v2.x code for `{clean_path}`.\n"
         f"USER REQUEST: {instruction}\n"
         f"EXISTING CODE (if updating):\n{old_code[:4000]}\n\n"
-        "RULES: Keep code lightweight & modular to save GitHub storage. Fix any deprecated AI models "
-        "(use openai/gpt-oss-20b or llama-4-scout-17b-16e-instruct or gemini-3.5-flash-lite). "
+        "RULES: Keep code lightweight & modular to save GitHub storage. "
         "If file is in `cogs/`, include `class CustomCog(commands.Cog):` and `async def setup(bot): await bot.add_cog(CustomCog(bot))`. "
         "Return STRICT JSON: {\"summary\": \"short Hinglish summary\", \"code\": \"COMPLETE PYTHON CODE\"}"
     )
@@ -208,6 +158,33 @@ async def gh_remove_file(file_path: str) -> str:
 
     return f"🗑️ **`{clean_path}`** GitHub aur Bot se delete ho gayi! (Storage Freed)"
 
+
+async def sync_github_cogs_live() -> int:
+    st, files = await gh_request("GET", f"contents/cogs?ref={GITHUB_BRANCH}")
+    if st != 200 or not isinstance(files, list):
+        raise RuntimeError(f"GitHub cogs fetch failed (HTTP {st})")
+    import __main__
+    os.makedirs("cogs", exist_ok=True)
+    synced = 0
+    for f in files:
+        name = f.get("name", "")
+        if not name.endswith(".py") or name.startswith("_"):
+            continue
+        f_st, f_data = await gh_request("GET", f"contents/cogs/{name}?ref={GITHUB_BRANCH}")
+        if f_st == 200 and isinstance(f_data, dict) and "content" in f_data:
+            code_txt = base64.b64decode(f_data["content"]).decode("utf-8")
+            with open(f"cogs/{name}", "w", encoding="utf-8") as fp:
+                fp.write(code_txt)
+            ext = f"cogs.{name[:-3]}"
+            importlib.invalidate_caches()
+            if ext in __main__.bot.extensions:
+                await __main__.bot.reload_extension(ext)
+            else:
+                await __main__.bot.load_extension(ext)
+            synced += 1
+    return synced
+
+
 # ==========================================
 # PART 3: POP-UP MODALS
 # ==========================================
@@ -261,7 +238,7 @@ class GitHubDeleteModal(discord.ui.Modal, title="GitHub App — Free Storage"):
             await interaction.followup.send(f"❌ **Delete Error:** `{e}`", ephemeral=True)
 
 # ==========================================
-# PART 4: GITHUB & FADEHOST APP VIEWS
+# PART 4: GITHUB & FADEHOST APP BUTTONS
 # ==========================================
 class GitHubAppView(discord.ui.View):
     def __init__(self):
@@ -282,11 +259,12 @@ class GitHubAppView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         try:
             import __main__
-            err = getattr(__main__, "LAST_RUNTIME_ERROR", "")
+            err = getattr(__main__, "LAST_RUNTIME_ERROR", "") or ("\n".join(CONSOLE_ERRORS) if CONSOLE_ERRORS else "")
             if not err:
                 return await interaction.followup.send("✅ **Repo Clean!** Abhi koi error nahi mila.", ephemeral=True)
             msg = await gh_write_smart_code("main.py", f"Fix this runtime error cleanly:\n{err}")
             __main__.LAST_RUNTIME_ERROR = ""
+            CONSOLE_ERRORS.clear()
             await interaction.followup.send(f"🛠️ **Fixed & Pushed to GitHub:**\n{msg}", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ **Fix Error:** `{e}`", ephemeral=True)
@@ -308,29 +286,29 @@ class FadehostAppView(discord.ui.View):
 
     @discord.ui.button(label="Restart", style=discord.ButtonStyle.primary, emoji="🔄")
     async def restart_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            bot_id = await get_fadehost_bot_id()
-            out = await fadehost_mcp_call("power_bot", {"bot_id": bot_id, "action": "restart"})
-            embed = discord.Embed(
-                title="FadeHost App • Restarting",
-                description=f"🔄 **Bot ID:** `{bot_id}`\n{out[:250] or 'Restart signal bhej diya gaya hai!'}",
-                color=discord.Color.from_rgb(88, 101, 242),
-            )
-            embed.set_thumbnail(url=FADEHOST_ICON)
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ **Restart Error:** `{e}`", ephemeral=True)
+        embed = discord.Embed(
+            title="FadeHost App • Restarting Bot",
+            description="🔄 **Bot restarting...** FadeHost container 3 second mein bot ko wapas online kar dega!",
+            color=discord.Color.from_rgb(88, 101, 242),
+        )
+        embed.set_thumbnail(url=FADEHOST_ICON)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        os._exit(0)
 
     @discord.ui.button(label="Deploy & Run", style=discord.ButtonStyle.success, emoji="🚀")
     async def deploy_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            bot_id = await get_fadehost_bot_id()
-            out = await fadehost_mcp_call("redeploy_app", {"app_id": bot_id})
+            import __main__
+            synced = await sync_github_cogs_live()
+            dyn_count = await __main__.reload_all_modules()
             embed = discord.Embed(
-                title="FadeHost App • Deploying Latest Code",
-                description=f"🚀 **Bot ID:** `{bot_id}`\n{out[:250] or 'GitHub se latest commit pull aur run ho raha hai!'}",
+                title="FadeHost App • Deployed & Live",
+                description=(
+                    f"🚀 **GitHub Cogs Synced:** `{synced}` files\n"
+                    f"📦 **Active Modules Reloaded:** `{dyn_count}`\n"
+                    "✅ **Status:** Latest GitHub code bina downtime ke live chal raha hai!"
+                ),
                 color=discord.Color.from_rgb(35, 134, 54),
             )
             embed.set_thumbnail(url=FADEHOST_ICON)
@@ -341,39 +319,33 @@ class FadehostAppView(discord.ui.View):
     @discord.ui.button(label="Smart Console", style=discord.ButtonStyle.secondary, emoji="🖥️")
     async def console_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        try:
-            import __main__
-            bot_id = await get_fadehost_bot_id()
-            logs = await fadehost_mcp_call("get_bot_logs", {"bot_id": bot_id, "lines": 60})
-            err_lines = [
-                ln for ln in logs.splitlines()
-                if any(k in ln.lower() for k in ("error", "traceback", "exception", "❌", "failed"))
-            ]
-            local_err = getattr(__main__, "LAST_RUNTIME_ERROR", "").strip()
-            if local_err:
-                err_lines.append(local_err)
+        import __main__
+        err_list = list(CONSOLE_ERRORS)
+        last_err = getattr(__main__, "LAST_RUNTIME_ERROR", "").strip()
+        if last_err and last_err not in err_list:
+            err_list.append(last_err)
 
-            if err_lines:
-                embed = discord.Embed(
-                    title="FadeHost Console • Error Detected",
-                    description="```py\n" + "\n".join(err_lines[-15:])[:1600] + "\n```",
-                    color=discord.Color.red(),
-                )
-            else:
-                embed = discord.Embed(
-                    title="FadeHost Smart Console",
-                    description=(
-                        "✅ **Successfully Bot Online**\n"
-                        "🟢 **0 Errors in Console & Runtime**\n"
-                        f"📡 **Instance:** `{bot_id}`"
-                    ),
-                    color=discord.Color.green(),
-                )
-            embed.set_author(name="FadeHost Laplace Cloud", icon_url=FADEHOST_ICON)
-            embed.set_thumbnail(url=FADEHOST_ICON)
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ **Console Error:** `{e}`", ephemeral=True)
+        if err_list:
+            embed = discord.Embed(
+                title="FadeHost Console • Error Detected",
+                description="```py\n" + "\n".join(err_list[-10:])[:1600] + "\n```",
+                color=discord.Color.red(),
+            )
+        else:
+            latency_ms = round(__main__.bot.latency * 1000)
+            embed = discord.Embed(
+                title="FadeHost Smart Console",
+                description=(
+                    "✅ **Successfully Bot Online**\n"
+                    "🟢 **0 Errors in Console & Runtime**\n"
+                    f"📡 **Gateway Ping:** `{latency_ms} ms` | **Cogs:** `{len(__main__.bot.cogs)}`"
+                ),
+                color=discord.Color.green(),
+            )
+        embed.set_author(name="FadeHost Laplace Cloud", icon_url=FADEHOST_ICON)
+        embed.set_thumbnail(url=FADEHOST_ICON)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 # ==========================================
 # PART 5: HOME LAUNCHER & -PANEL COMMAND
@@ -392,7 +364,6 @@ class HomeLauncherView(discord.ui.View):
     async def github_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            repo_name = get_clean_repo()
             st, files = await gh_request("GET", f"contents/cogs?ref={GITHUB_BRANCH}")
             cog_files = [f for f in files if isinstance(files, list) and f["name"].endswith(".py")] if st == 200 else []
             total_kb = round(sum(f.get("size", 0) for f in cog_files) / 1024, 2)
@@ -401,7 +372,7 @@ class HomeLauncherView(discord.ui.View):
             embed = discord.Embed(
                 title="GitHub App",
                 description=(
-                    f"📦 **Repository:** `{repo_name}`\n"
+                    f"📦 **Repository:** `{REPO_OWNER_AND_NAME}`\n"
                     f"💾 **Cogs Storage Used:** `{total_kb} KB` ({len(cog_files)} files)\n"
                     f"📂 **Files:** {names}\n\n"
                     "Neeche se **Create/Edit**, **Auto-Fix**, ya **Delete** chunein:"
@@ -457,4 +428,6 @@ class ElyxPanelCog(commands.Cog):
 async def setup(bot: commands.Bot):
     bot.remove_command("panel")
     await bot.add_cog(ElyxPanelCog(bot))
-    
+
+
+

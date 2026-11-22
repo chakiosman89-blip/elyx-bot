@@ -389,8 +389,10 @@ class HomeLauncherView(discord.ui.View):
             return False
         return True
 
+
     @discord.ui.button(label="GitHub", style=discord.ButtonStyle.secondary, emoji="🐙")
     async def github_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         st, files = await gh_request("GET", f"contents/cogs?ref={GITHUB_BRANCH}")
         cog_files = [f for f in files if isinstance(files, list) and f["name"].endswith(".py")] if st == 200 else []
         total_kb = round(sum(f.get("size", 0) for f in cog_files) / 1024, 2)
@@ -408,7 +410,9 @@ class HomeLauncherView(discord.ui.View):
         )
         embed.set_author(name="GitHub Developer Cloud", icon_url=GITHUB_ICON)
         embed.set_thumbnail(url=GITHUB_ICON)
-        await interaction.response.send_message(embed=embed, view=GitHubAppView(), ephemeral=True)
+        await interaction.followup.send(embed=embed, view=GitHubAppView(), ephemeral=True)
+        
+    
 
     @discord.ui.button(label="Fadehost", style=discord.ButtonStyle.primary, emoji="🚀")
     async def fadehost_app(self, interaction: discord.Interaction, button: discord.ui.Button):

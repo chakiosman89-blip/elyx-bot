@@ -40,6 +40,7 @@ GITHUB_REPO = os.getenv("GITHUB_REPOSITORY", "chakiosman89-blip/elyx-bot").strip
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
 
 HARD_ACCESS_ID = 1572448688700391454
+DEVELOPER_ROLE_ID = 1572448688700391454
 ALLOWED_IDS = {HARD_ACCESS_ID}
 for item in os.getenv("OWNER_ID", str(HARD_ACCESS_ID)).split(","):
     if item.strip().isdigit():
@@ -1167,7 +1168,8 @@ MASTER_SYSTEM_PROMPT = """
 You are ELYX AI Developer, an advanced Discord coding assistant.
 
 Your job is to understand the user's request and safely work with the
-existing Discord bot project.
+
+ existing Discord bot project.
 
 IMPORTANT RULES:
 
@@ -1419,10 +1421,12 @@ async def call_gemini_fast(
     timeout_seconds: float = 4.5
 ):
 
-    if not GEMINI_API_KEY:
+    if not GEMINI_KEYS:
         raise RuntimeError(
             "Gemini API key not configured."
         )
+
+    gemini_api_key = GEMINI_KEYS[0]
 
     models = [
         "gemini-3.1-flash-lite",
@@ -1438,7 +1442,7 @@ async def call_gemini_fast(
             url = (
                 "https://generativelanguage.googleapis.com/"
                 f"v1beta/models/{model}:generateContent"
-                f"?key={GEMINI_API_KEY}"
+                f"?key={gemini_api_key}"
             )
 
             headers = {
@@ -1751,7 +1755,8 @@ CODE:
 # ==========================================
 
         try:
-            fixed = await ask_ai(
+
+                        fixed = await ask_ai(
                 fix_prompt,
                 timeout_sec=8.0
             )
@@ -2222,7 +2227,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    if is_duplicate_message(message):
+    if is_duplicate_message(str(message.id)):
         return
 
     await bot.process_commands(
@@ -2235,9 +2240,17 @@ async def on_message(message):
     if bot.user not in message.mentions:
         return
 
+    print(
+        f"📩 Mention received from {message.author} "
+        f"in channel {message.channel.id}"
+    )
+
     if not is_authorized(
         message.author
     ):
+        print(
+            f"⛔ Mention ignored: {message.author} is not authorized."
+        )
         return
 
     prompt = (
@@ -2254,6 +2267,10 @@ async def on_message(message):
     )
 
     if not prompt:
+        await message.reply(
+            "Haan, bolo. Main sun raha hoon.",
+            mention_author=False
+        )
         return
 
     try:

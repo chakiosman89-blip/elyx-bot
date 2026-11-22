@@ -52,13 +52,28 @@ async def fadehost_mcp_call(tool_name: str, arguments: dict = None) -> str:
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": tool_name, "arguments": arguments or {}},
-    }
     async with aiohttp.ClientSession() as session:
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "elyx-bot", "version": "1.0"},
+            },
+        }
+        async with session.post(FADEHOST_MCP_URL, headers=headers, json=init_payload, timeout=15) as init_resp:
+            session_id = init_resp.headers.get("Mcp-Session-Id") or init_resp.headers.get("mcp-session-id")
+            if session_id:
+                headers["Mcp-Session-Id"] = session_id
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments or {}},
+        }
         async with session.post(FADEHOST_MCP_URL, headers=headers, json=payload, timeout=20) as resp:
             raw = await resp.text()
             if resp.status != 200:
@@ -72,7 +87,8 @@ async def fadehost_mcp_call(tool_name: str, arguments: dict = None) -> str:
                 raise RuntimeError(data["error"].get("message", str(data["error"])))
             parts = data.get("result", {}).get("content", [])
             return "\n".join([c.get("text", "") for c in parts if c.get("type") == "text"])
-
+            
+    
 
 async def get_fadehost_bot_id() -> str:
     env_id = os.getenv("FADEHOST_SERVER_ID", "").strip()

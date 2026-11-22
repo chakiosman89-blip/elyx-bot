@@ -375,7 +375,6 @@ class FadehostAppView(discord.ui.View):
         except Exception as e:
             await interaction.followup.send(f"❌ **Console Error:** `{e}`", ephemeral=True)
 
-
 # ==========================================
 # PART 3C: HOME LAUNCHER & -PANEL COMMAND
 # ==========================================
@@ -389,30 +388,30 @@ class HomeLauncherView(discord.ui.View):
             return False
         return True
 
-
     @discord.ui.button(label="GitHub", style=discord.ButtonStyle.secondary, emoji="🐙")
     async def github_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        st, files = await gh_request("GET", f"contents/cogs?ref={GITHUB_BRANCH}")
-        cog_files = [f for f in files if isinstance(files, list) and f["name"].endswith(".py")] if st == 200 else []
-        total_kb = round(sum(f.get("size", 0) for f in cog_files) / 1024, 2)
-        names = ", ".join([f"`{f['name']}`" for f in cog_files]) or "None"
+        try:
+            st, files = await gh_request("GET", f"contents/cogs?ref={GITHUB_BRANCH}")
+            cog_files = [f for f in files if isinstance(files, list) and f["name"].endswith(".py")] if st == 200 else []
+            total_kb = round(sum(f.get("size", 0) for f in cog_files) / 1024, 2)
+            names = ", ".join([f"`{f['name']}`" for f in cog_files]) or "None"
 
-        embed = discord.Embed(
-            title="GitHub App",
-            description=(
-                f"📦 **Repository:** `{GITHUB_REPO}`\n"
-                f"💾 **Cogs Storage Used:** `{total_kb} KB` ({len(cog_files)} files)\n"
-                f"📂 **Files:** {names}\n\n"
-                "Neeche se **Create/Edit**, **Auto-Fix**, ya **Delete** chunein:"
-            ),
-            color=discord.Color.from_rgb(36, 41, 47),
-        )
-        embed.set_author(name="GitHub Developer Cloud", icon_url=GITHUB_ICON)
-        embed.set_thumbnail(url=GITHUB_ICON)
-        await interaction.followup.send(embed=embed, view=GitHubAppView(), ephemeral=True)
-        
-    
+            embed = discord.Embed(
+                title="GitHub App",
+                description=(
+                    f"📦 **Repository:** `{GITHUB_REPO}`\n"
+                    f"💾 **Cogs Storage Used:** `{total_kb} KB` ({len(cog_files)} files)\n"
+                    f"📂 **Files:** {names}\n\n"
+                    "Neeche se **Create/Edit**, **Auto-Fix**, ya **Delete** chunein:"
+                ),
+                color=discord.Color.from_rgb(36, 41, 47),
+            )
+            embed.set_author(name="GitHub Developer Cloud", icon_url=GITHUB_ICON)
+            embed.set_thumbnail(url=GITHUB_ICON)
+            await interaction.followup.send(embed=embed, view=GitHubAppView(), ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ **GitHub App Error:** `{e}`", ephemeral=True)
 
     @discord.ui.button(label="Fadehost", style=discord.ButtonStyle.primary, emoji="🚀")
     async def fadehost_app(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -453,8 +452,9 @@ class ElyxPanelCog(commands.Cog):
         await ctx.reply(embed=embed, view=HomeLauncherView())
 
 
-
 async def setup(bot: commands.Bot):
     bot.remove_command("panel")
     await bot.add_cog(ElyxPanelCog(bot))
+
+
     

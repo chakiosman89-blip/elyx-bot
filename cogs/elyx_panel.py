@@ -20,12 +20,8 @@ DEFAULT_REPO = "chakiosman89-blip/elyx-bot"
 
 
 def get_clean_repo() -> str:
-    raw = os.getenv("GITHUB_REPOSITORY", DEFAULT_REPO).strip()
-    raw = re.sub(r"^https?://(www\.)?github\.com/?", "", raw, flags=re.IGNORECASE).strip("/")
-    parts = [p for p in raw.split("/") if p]
-    if len(parts) >= 2:
-        return f"{parts[0]}/{parts[1]}"
-    return DEFAULT_REPO
+    return "chakiosman89-blip/elyx-bot"
+    
 
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()

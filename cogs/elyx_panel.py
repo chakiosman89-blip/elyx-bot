@@ -8,7 +8,7 @@ import discord
 from discord.ext import commands
 
 # ==========================================
-# PART 1: BRANDING, GITHUB & FADEHOST ENGINE
+# PART 1: SAFE REPO & FADEHOST MCP ENGINE
 # ==========================================
 HARD_ACCESS_ID = 1572448688700391454
 ALLOWED_IDS = {HARD_ACCESS_ID}
@@ -16,14 +16,23 @@ for _item in os.getenv("OWNER_ID", str(HARD_ACCESS_ID)).split(","):
     if _item.strip().isdigit():
         ALLOWED_IDS.add(int(_item.strip()))
 
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = os.getenv("GITHUB_REPOSITORY", "chakiosman89-blip/elyx-bot").strip()
-GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
+DEFAULT_REPO = "chakiosman89-blip/elyx-bot"
 
+
+def get_clean_repo() -> str:
+    raw = os.getenv("GITHUB_REPOSITORY", DEFAULT_REPO).strip()
+    raw = re.sub(r"^https?://(www\.)?github\.com/?", "", raw, flags=re.IGNORECASE).strip("/")
+    parts = [p for p in raw.split("/") if p]
+    if len(parts) >= 2:
+        return f"{parts[0]}/{parts[1]}"
+    return DEFAULT_REPO
+
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip() or "main"
 FADEHOST_API_KEY = os.getenv("FADEHOST_API_KEY", "").strip()
 FADEHOST_MCP_URL = "https://fadehost.com"
 
-# Real Official Brand Logos
 GITHUB_ICON = "https://githubassets.com"
 FADEHOST_ICON = "https://google.com"
 
@@ -36,12 +45,6 @@ def is_owner(user: discord.abc.User) -> bool:
     if isinstance(user, discord.Member):
         return any(r.id in ALLOWED_IDS for r in user.roles)
     return False
-
-
-def make_bar(pct: float, length: int = 10) -> str:
-    pct = max(0.0, min(100.0, pct))
-    filled = int(round((pct / 100.0) * length))
-    return "█" * filled + "░" * (length - filled)
 
 
 async def fadehost_mcp_call(tool_name: str, arguments: dict = None) -> str:
@@ -64,9 +67,9 @@ async def fadehost_mcp_call(tool_name: str, arguments: dict = None) -> str:
             },
         }
         async with session.post(FADEHOST_MCP_URL, headers=headers, json=init_payload, timeout=15) as init_resp:
-            session_id = init_resp.headers.get("Mcp-Session-Id") or init_resp.headers.get("mcp-session-id")
-            if session_id:
-                headers["Mcp-Session-Id"] = session_id
+            sid = init_resp.headers.get("Mcp-Session-Id") or init_resp.headers.get("mcp-session-id")
+            if sid:
+                headers["Mcp-Session-Id"] = sid
 
         payload = {
             "jsonrpc": "2.0",
@@ -87,8 +90,7 @@ async def fadehost_mcp_call(tool_name: str, arguments: dict = None) -> str:
                 raise RuntimeError(data["error"].get("message", str(data["error"])))
             parts = data.get("result", {}).get("content", [])
             return "\n".join([c.get("text", "") for c in parts if c.get("type") == "text"])
-            
-    
+
 
 async def get_fadehost_bot_id() -> str:
     env_id = os.getenv("FADEHOST_SERVER_ID", "").strip()
@@ -102,9 +104,10 @@ async def get_fadehost_bot_id() -> str:
 
 
 async def gh_request(method: str, path: str, payload: dict = None):
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-        raise RuntimeError("GITHUB_TOKEN ya GITHUB_REPOSITORY missing hai!")
-    url = f"https://github.com{GITHUB_REPO}/{path.lstrip('/')}"
+    if not GITHUB_TOKEN:
+        raise RuntimeError("GITHUB_TOKEN missing hai!")
+    repo = get_clean_repo()
+    url = f"https://github.com{repo}/{path.lstrip('/')}"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
@@ -114,8 +117,9 @@ async def gh_request(method: str, path: str, payload: dict = None):
             txt = await resp.text()
             return resp.status, (json.loads(txt) if txt else {})
 
+
 # ==========================================
-# PART 2: GITHUB SMART STUDIO (SAVE / FIX / DELETE)
+# PART 2: GITHUB SMART CODER & CLEANER
 # ==========================================
 async def gh_write_smart_code(file_path: str, instruction: str) -> str:
     clean_path = file_path.strip().lstrip("/")
@@ -130,7 +134,7 @@ async def gh_write_smart_code(file_path: str, instruction: str) -> str:
     status, existing = await gh_request("GET", f"contents/{clean_path}?ref={GITHUB_BRANCH}")
     old_code = ""
     sha = None
-    if status == 200:
+    if status == 200 and isinstance(existing, dict):
         sha = existing.get("sha")
         old_code = base64.b64decode(existing.get("content", "")).decode("utf-8")
 
@@ -140,7 +144,7 @@ async def gh_write_smart_code(file_path: str, instruction: str) -> str:
         f"USER REQUEST: {instruction}\n"
         f"EXISTING CODE (if updating):\n{old_code[:4000]}\n\n"
         "RULES: Keep code lightweight & modular to save GitHub storage. Fix any deprecated AI models "
-        "(use llama-3.3-70b-versatile or gemini-3.5-flash-lite). "
+        "(use openai/gpt-oss-20b or llama-4-scout-17b-16e-instruct or gemini-3.5-flash-lite). "
         "If file is in `cogs/`, include `class CustomCog(commands.Cog):` and `async def setup(bot): await bot.add_cog(CustomCog(bot))`. "
         "Return STRICT JSON: {\"summary\": \"short Hinglish summary\", \"code\": \"COMPLETE PYTHON CODE\"}"
     )
@@ -188,7 +192,7 @@ async def gh_remove_file(file_path: str) -> str:
     if clean_path == "main.py":
         raise RuntimeError("Safety Lock: `main.py` delete nahi kar sakte!")
     status, existing = await gh_request("GET", f"contents/{clean_path}?ref={GITHUB_BRANCH}")
-    if status != 200:
+    if status != 200 or not isinstance(existing, dict):
         raise RuntimeError(f"GitHub par `{clean_path}` nahi mili!")
 
     del_st, _ = await gh_request(
@@ -209,7 +213,7 @@ async def gh_remove_file(file_path: str) -> str:
     return f"🗑️ **`{clean_path}`** GitHub aur Bot se delete ho gayi! (Storage Freed)"
 
 # ==========================================
-# PART 3A: POP-UP MODALS
+# PART 3: POP-UP MODALS
 # ==========================================
 class GitHubStudioModal(discord.ui.Modal, title="GitHub App — Code & Auto-Connect"):
     file_name = discord.ui.TextInput(
@@ -260,8 +264,8 @@ class GitHubDeleteModal(discord.ui.Modal, title="GitHub App — Free Storage"):
         except Exception as e:
             await interaction.followup.send(f"❌ **Delete Error:** `{e}`", ephemeral=True)
 
-  # ==========================================
-# PART 3B: GITHUB & FADEHOST APP BUTTONS
+# ==========================================
+# PART 4: GITHUB & FADEHOST APP VIEWS
 # ==========================================
 class GitHubAppView(discord.ui.View):
     def __init__(self):
@@ -376,7 +380,7 @@ class FadehostAppView(discord.ui.View):
             await interaction.followup.send(f"❌ **Console Error:** `{e}`", ephemeral=True)
 
 # ==========================================
-# PART 3C: HOME LAUNCHER & -PANEL COMMAND
+# PART 5: HOME LAUNCHER & -PANEL COMMAND
 # ==========================================
 class HomeLauncherView(discord.ui.View):
     def __init__(self):
@@ -392,6 +396,7 @@ class HomeLauncherView(discord.ui.View):
     async def github_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
+            repo_name = get_clean_repo()
             st, files = await gh_request("GET", f"contents/cogs?ref={GITHUB_BRANCH}")
             cog_files = [f for f in files if isinstance(files, list) and f["name"].endswith(".py")] if st == 200 else []
             total_kb = round(sum(f.get("size", 0) for f in cog_files) / 1024, 2)
@@ -400,7 +405,7 @@ class HomeLauncherView(discord.ui.View):
             embed = discord.Embed(
                 title="GitHub App",
                 description=(
-                    f"📦 **Repository:** `{GITHUB_REPO}`\n"
+                    f"📦 **Repository:** `{repo_name}`\n"
                     f"💾 **Cogs Storage Used:** `{total_kb} KB` ({len(cog_files)} files)\n"
                     f"📂 **Files:** {names}\n\n"
                     "Neeche se **Create/Edit**, **Auto-Fix**, ya **Delete** chunein:"
@@ -415,6 +420,7 @@ class HomeLauncherView(discord.ui.View):
 
     @discord.ui.button(label="Fadehost", style=discord.ButtonStyle.primary, emoji="🚀")
     async def fadehost_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         embed = discord.Embed(
             title="FadeHost App",
             description=(
@@ -427,7 +433,7 @@ class HomeLauncherView(discord.ui.View):
         )
         embed.set_author(name="FadeHost Cloud Panel", icon_url=FADEHOST_ICON)
         embed.set_thumbnail(url=FADEHOST_ICON)
-        await interaction.response.send_message(embed=embed, view=FadehostAppView(), ephemeral=True)
+        await interaction.followup.send(embed=embed, view=FadehostAppView(), ephemeral=True)
 
 
 class ElyxPanelCog(commands.Cog):
@@ -455,6 +461,4 @@ class ElyxPanelCog(commands.Cog):
 async def setup(bot: commands.Bot):
     bot.remove_command("panel")
     await bot.add_cog(ElyxPanelCog(bot))
-
-
     

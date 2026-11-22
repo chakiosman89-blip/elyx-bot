@@ -1657,6 +1657,7 @@ async def ask_ai(
                 return_exceptions=True
                     )
 
+
 # ==========================================
 # PART 3C-3: AI ERROR HANDLING
 # ==========================================
@@ -1708,6 +1709,7 @@ async def compile_and_heal_code(
         return code
 
     except SyntaxError as first_error:
+
         fix_prompt = f"""
 Fix ONLY the Python syntax error in this code.
 
@@ -1719,8 +1721,30 @@ Syntax error:
 {first_error}
 
 CODE:
-```python
 {code}
+"""
+
+        try:
+            fixed = await ask_ai(
+                fix_prompt,
+                timeout_sec=8.0
+            )
+
+            fixed = extract_code_block(
+                fixed
+            )
+
+            compile(
+                fixed,
+                "<dynamic_code>",
+                "exec"
+            )
+
+            return fixed
+
+        except Exception:
+            return code
+        
 
 # ==========================================
 # PART 3C-4: CODE AUTO-HEAL

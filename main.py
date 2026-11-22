@@ -542,7 +542,9 @@ def extract_json_safe(raw: str) -> dict:
 async def call_groq_fast(prompt: str, timeout_sec: float = 6.5) -> str:
     if not GROQ_API_KEY:
         raise RuntimeError("No GROQ_API_KEY")
+    last_err = None
     headers = {
+
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
